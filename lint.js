@@ -30,6 +30,7 @@ var MY_HEX_ADDR = "";
 var MY_PUBKEY = "";
 var ORDERS = [];
 var FILLS = [];
+var MY_KEYS = {};              // all wallet pubkeys {key: true} for isMine check
 var ORDER_SIDE = "sell";
 var FILL_IN_PROGRESS = false;
 var GECKO_PRICE = null;
@@ -106,23 +107,43 @@ function fetchAndStoreIdentity(callback) {
     });
 }
 
-function finishInit() {
-    MDS.sql(
-        "CREATE TABLE IF NOT EXISTS `fills` (" +
-        "  `id` bigint auto_increment," +
-        "  `orderid` varchar(160) NOT NULL," +
-        "  `side` varchar(10) NOT NULL," +
-        "  `price` varchar(80) NOT NULL," +
-        "  `amount` varchar(80) NOT NULL," +
-        "  `total` varchar(80) NOT NULL," +
-        "  `block` int NOT NULL," +
-        "  `timestamp` bigint NOT NULL" +
-        ")", function() {
-            DB_READY = true;
-            MDS.log("Limit v0.2.0 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "...");
-            refreshOrders(); refreshBalances(); loadFills();
+function loadWalletKeys(callback) {
+    MDS.cmd("keys", function(res) {
+        if (res.status && res.response) {
+            (res.response || []).forEach(function(k) {
+                if (k.publickey) MY_KEYS[k.publickey] = true;
+            });
+            MDS.log("Loaded " + Object.keys(MY_KEYS).length + " wallet keys");
         }
-    );
+        // Always include the session key too
+        if (MY_PUBKEY) MY_KEYS[MY_PUBKEY] = true;
+        if (callback) callback();
+    });
+}
+
+function isMyKey(pubkey) {
+    return MY_KEYS[pubkey] === true;
+}
+
+function finishInit() {
+    loadWalletKeys(function() {
+        MDS.sql(
+            "CREATE TABLE IF NOT EXISTS `fills` (" +
+            "  `id` bigint auto_increment," +
+            "  `orderid` varchar(160) NOT NULL," +
+            "  `side` varchar(10) NOT NULL," +
+            "  `price` varchar(80) NOT NULL," +
+            "  `amount` varchar(80) NOT NULL," +
+            "  `total` varchar(80) NOT NULL," +
+            "  `block` int NOT NULL," +
+            "  `timestamp` bigint NOT NULL" +
+            ")", function() {
+                DB_READY = true;
+                MDS.log("Limit v0.2.0 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
+                refreshOrders(); refreshBalances(); loadFills();
+            }
+        );
+    });
 }
 
 // -- Helpers --
@@ -354,7 +375,7 @@ function parseOrderCoins(coins) {
             orderId: oid,
             side: side,
             sideNum: sideNum,
-            isMine: ownerkey === MY_PUBKEY
+            isMine: isMyKey(ownerkey)
         });
     });
     renderOrderBook();
