@@ -109,14 +109,21 @@ function fetchAndStoreIdentity(callback) {
 
 function loadWalletKeys(callback) {
     MDS.cmd("keys", function(res) {
-        if (res.status && res.response) {
-            (res.response || []).forEach(function(k) {
-                if (k.publickey) MY_KEYS[k.publickey] = true;
-            });
-            MDS.log("Loaded " + Object.keys(MY_KEYS).length + " wallet keys");
-        }
-        // Always include the session key too
+        MDS.log("Keys cmd status=" + (res ? res.status : "null"));
+        try {
+            if (res && res.status && res.response) {
+                var resp = res.response;
+                var list = resp.keys || resp;
+                if (Array.isArray(list)) {
+                    for (var i = 0; i < list.length; i++) {
+                        var pk = list[i].publickey || list[i];
+                        if (pk && typeof pk === 'string') MY_KEYS[pk] = true;
+                    }
+                }
+            }
+        } catch(e) { MDS.log("Keys error: " + e); }
         if (MY_PUBKEY) MY_KEYS[MY_PUBKEY] = true;
+        MDS.log("Wallet keys loaded: " + Object.keys(MY_KEYS).length);
         if (callback) callback();
     });
 }
