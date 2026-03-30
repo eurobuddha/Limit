@@ -1,0 +1,872 @@
+/**
+ * Limit v0.2.0 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Uses official Minima VERIFYOUT exchange contract pattern
+ * FULL FILL ONLY — no partial fills
+ *
+ * KISS VM Smart Contract (from docs.minima.global):
+ *   IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF
+ *   ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE)
+ *   RETURN TRUE
+ *
+ * State layout:
+ *   Port 0 = owner public key (for SIGNEDBY cancel)
+ *   Port 1 = want address (where owner receives payment)
+ *   Port 2 = want amount (exact amount owner wants)
+ *   Port 3 = want tokenid (token owner wants)
+ *   Port 4 = order ID (hex timestamp)
+ *   Port 5 = side (0=buy, 1=sell)
+ *   Port 6 = price (display only, not used by contract)
+ *
+ * CANCEL: txnsign publickey:OWNERKEY (pending on restricted MDS) → auto-complete txnbasics+txnpost on NEWBLOCK
+ * FILL: txnsign publickey:auto (pending on restricted MDS) → auto-complete txnbasics+txnpost on NEWBLOCK
+ */
+
+var SCRIPT = 'IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE) RETURN TRUE';
+var USDT_ID = "0x7D39745FBD29049BE29850B55A18BF550E4D442F930F86266E34193D89042A90";
+var SCRIPT_ADDR = "";
+var DB_READY = false;
+var MY_ADDR = "";
+var MY_HEX_ADDR = "";
+var MY_PUBKEY = "";
+var ORDERS = [];
+var FILLS = [];
+var ORDER_SIDE = "sell";
+var FILL_IN_PROGRESS = false;
+var GECKO_PRICE = null;
+var PENDING_TXID = null;       // txid awaiting pending approval
+var PENDING_CALLBACK = null;   // callback to run after fill completes
+
+// -- Init --
+MDS.init(function(msg) {
+    if (msg.event === "inited") initApp();
+    if (msg.event === "NEWBLOCK") {
+        updateBlock(msg);
+        if (DB_READY) { refreshOrders(); refreshBalances(); }
+        if (PENDING_TXID) checkPendingComplete();
+    }
+    if (msg.event === "NEWBALANCE") {
+        if (DB_READY) { refreshOrders(); refreshBalances(); clearPendingStatus(); }
+    }
+});
+
+function initApp() {
+    MDS.cmd('newscript script:"' + SCRIPT + '" trackall:true', function(res) {
+        if (res.status) {
+            SCRIPT_ADDR = res.response.address;
+            MDS.log("Limit v0.2.0 contract: " + SCRIPT_ADDR);
+        } else {
+            MDS.log("SCRIPT ERROR: " + JSON.stringify(res.error));
+        }
+        loadIdentity(function() { finishInit(); });
+    });
+    MDS.cmd("block", function(res) {
+        if (res.status) document.getElementById("blockHeight").innerText = "#" + res.response.block;
+    });
+    setupUI();
+    fetchGeckoPrice();
+    setInterval(fetchGeckoPrice, 60000);
+}
+
+function loadIdentity(callback) {
+    try {
+        var sp = localStorage.getItem("limit_pubkey");
+        var sh = localStorage.getItem("limit_hexaddr");
+        var sm = localStorage.getItem("limit_miniaddr");
+        if (sp && sh) { MY_PUBKEY = sp; MY_HEX_ADDR = sh; MY_ADDR = sm || sh; callback(); return; }
+    } catch(e) {}
+    MDS.keypair.get("limit_pubkey", function(kres) {
+        if (kres.status && kres.value && kres.value.length > 10) {
+            MY_PUBKEY = kres.value;
+            MDS.keypair.get("limit_hexaddr", function(k2) {
+                MY_HEX_ADDR = (k2.status && k2.value) ? k2.value : "";
+                MDS.keypair.get("limit_miniaddr", function(k3) {
+                    MY_ADDR = (k3.status && k3.value) ? k3.value : MY_HEX_ADDR;
+                    if (MY_PUBKEY && MY_HEX_ADDR) { callback(); return; }
+                    fetchAndStoreIdentity(callback);
+                });
+            });
+            return;
+        }
+        fetchAndStoreIdentity(callback);
+    });
+}
+
+function fetchAndStoreIdentity(callback) {
+    MDS.cmd("getaddress", function(res) {
+        if (!res.status) { callback(); return; }
+        MY_PUBKEY = res.response.publickey;
+        MY_HEX_ADDR = res.response.address;
+        MY_ADDR = res.response.miniaddress;
+        try { localStorage.setItem("limit_pubkey", MY_PUBKEY); localStorage.setItem("limit_hexaddr", MY_HEX_ADDR); localStorage.setItem("limit_miniaddr", MY_ADDR); } catch(e) {}
+        MDS.keypair.set("limit_pubkey", MY_PUBKEY, function() {
+            MDS.keypair.set("limit_hexaddr", MY_HEX_ADDR, function() {
+                MDS.keypair.set("limit_miniaddr", MY_ADDR, function() { callback(); });
+            });
+        });
+    });
+}
+
+function finishInit() {
+    MDS.sql(
+        "CREATE TABLE IF NOT EXISTS `fills` (" +
+        "  `id` bigint auto_increment," +
+        "  `orderid` varchar(160) NOT NULL," +
+        "  `side` varchar(10) NOT NULL," +
+        "  `price` varchar(80) NOT NULL," +
+        "  `amount` varchar(80) NOT NULL," +
+        "  `total` varchar(80) NOT NULL," +
+        "  `block` int NOT NULL," +
+        "  `timestamp` bigint NOT NULL" +
+        ")", function() {
+            DB_READY = true;
+            MDS.log("Limit v0.2.0 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "...");
+            refreshOrders(); refreshBalances(); loadFills();
+        }
+    );
+}
+
+// -- Helpers --
+function fmtPrice(p) { return p < 0.01 ? p.toFixed(6) : p < 1 ? p.toFixed(5) : p.toFixed(4); }
+function sqlEsc(v) { return String(v).replace(/'/g, "''"); }
+function isPending(res) {
+    if (!res) return false;
+    if (res.pending === true) return true;
+    // Restricted MDS returns {status:false, error:"...pending.."} instead of {pending:true}
+    if (res.status === false && res.error && String(res.error).toLowerCase().indexOf("pending") >= 0) return true;
+    return false;
+}
+
+function showPending(el, msg, txid, onComplete) {
+    if (el) { el.className = "status status--warn"; el.innerText = msg || "Approve in Pending Actions..."; }
+    FILL_IN_PROGRESS = false;
+    // Store txid for auto-completion after pending approval
+    if (txid) {
+        PENDING_TXID = txid;
+        PENDING_CALLBACK = onComplete || null;
+        MDS.log("PENDING: waiting for approval of " + txid);
+    }
+}
+
+// Called on NEWBLOCK — check if pending txnsign was approved, then complete with txnbasics+txnpost
+function checkPendingComplete() {
+    if (!PENDING_TXID) return;
+    var txid = PENDING_TXID;
+    MDS.cmd("txnlist", function(res) {
+        if (!res.status || !res.response) return;
+        var found = null;
+        for (var i = 0; i < res.response.length; i++) {
+            if (res.response[i].id === txid) { found = res.response[i]; break; }
+        }
+        if (!found) { PENDING_TXID = null; PENDING_CALLBACK = null; return; } // tx gone (deleted or expired)
+        // Check if signatures are populated (pending was approved)
+        var sigs = found.witness && found.witness.signatures;
+        if (!sigs || sigs.length === 0) return; // not yet approved, wait for next block
+        var hasSigs = sigs[0] && sigs[0].signatures && sigs[0].signatures.length > 0;
+        if (!hasSigs) return;
+        // Check if mmrproofs already populated (already completed)
+        var proofs = found.witness.mmrproofs;
+        if (proofs && proofs.length > 0) return; // already done
+        // Signatures present, proofs missing — complete the transaction!
+        MDS.log("PENDING APPROVED: completing " + txid + " with txnbasics+txnpost");
+        var cb = PENDING_CALLBACK;
+        PENDING_TXID = null;
+        PENDING_CALLBACK = null;
+        MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(resArr) {
+            var rp = Array.isArray(resArr) ? resArr[resArr.length - 1] : resArr;
+            MDS.log("AUTO-COMPLETE: status=" + (rp ? rp.status : "null") + " err=" + (rp ? rp.error || "none" : "no response"));
+            if (rp && rp.status) {
+                MDS.notify("Transaction completed!");
+                if (cb) cb(true);
+                refreshOrders(); refreshBalances();
+            } else {
+                MDS.log("AUTO-COMPLETE FAILED: " + (rp ? rp.error || "unknown" : "no response"));
+                if (cb) cb(false);
+            }
+        });
+    });
+}
+
+function showErr(el, msg, txid) {
+    if (el) { el.className = "status status--err"; el.innerText = msg; }
+    if (txid) MDS.cmd("txndelete id:" + txid);
+    FILL_IN_PROGRESS = false;
+    MDS.log("ERROR: " + msg);
+}
+
+function showOk(el, msg) {
+    if (el) { el.className = "status status--ok"; el.innerText = msg; }
+}
+
+function clearPendingStatus() {
+    var els = document.querySelectorAll(".status--warn");
+    for (var i = 0; i < els.length; i++) {
+        els[i].className = "status status--ok"; els[i].innerText = "Confirmed!";
+        (function(el) { setTimeout(function() { el.innerText = ""; el.className = "status"; }, 4000); })(els[i]);
+    }
+}
+
+function refreshBalances() {
+    MDS.cmd("balance", function(res) {
+        if (!res.status) return;
+        var minBal = "0", usdtBal = "0";
+        (res.response || []).forEach(function(b) {
+            if (b.tokenid === "0x00") minBal = b.confirmed;
+            if (b.tokenid === USDT_ID) usdtBal = b.confirmed;
+        });
+        document.getElementById("minimaBalance").innerText = parseFloat(minBal).toFixed(2) + " MINIMA";
+        document.getElementById("usdtBalance").innerText = parseFloat(usdtBal).toFixed(2) + " USDT";
+    });
+}
+
+function updateBlock(msg) {
+    document.getElementById("blockHeight").innerText = "#" + parseInt(msg.data.txpow.header.block);
+}
+
+// -- CoinGecko Price --
+function parseNetResponse(res) {
+    var raw = res.response || res;
+    if (typeof raw === 'object') return raw;
+    try { return JSON.parse(raw); } catch(e) { return null; }
+}
+
+function fetchGeckoPrice() {
+    MDS.net.GET("https://api.coingecko.com/api/v3/simple/price?ids=minima&vs_currencies=usd&include_24hr_change=true", function(res) {
+        try {
+            var data = parseNetResponse(res);
+            if (data && data.minima) {
+                GECKO_PRICE = data.minima.usd;
+                var change = data.minima.usd_24h_change || 0;
+                var priceEl = document.getElementById("geckoPrice");
+                if (priceEl) {
+                    var sign = change >= 0 ? "+" : "";
+                    priceEl.innerText = "$" + GECKO_PRICE.toFixed(6) + " (" + sign + change.toFixed(1) + "%)";
+                    priceEl.className = change >= 0 ? "hdr__bal status--ok" : "hdr__bal status--err";
+                }
+            }
+        } catch(e) { MDS.log("Gecko price error: " + e); }
+    });
+}
+
+function fetchGeckoChart(callback) {
+    MDS.net.GET("https://api.coingecko.com/api/v3/coins/minima/market_chart?vs_currency=usd&days=7", function(res) {
+        try {
+            var data = parseNetResponse(res);
+            callback(data);
+        } catch(e) { callback(null); }
+    });
+}
+
+// -- UI Setup --
+function setupUI() {
+    document.querySelectorAll(".tab").forEach(function(tab) {
+        tab.addEventListener("click", function() {
+            document.querySelectorAll(".tab").forEach(function(t) { t.classList.remove("tab--active"); });
+            document.querySelectorAll(".view").forEach(function(v) { v.classList.remove("view--active"); });
+            tab.classList.add("tab--active");
+            document.getElementById("view-" + tab.dataset.view).classList.add("view--active");
+            if (tab.dataset.view === "chart") renderCharts();
+        });
+    });
+    document.querySelectorAll(".side-btn").forEach(function(btn) {
+        btn.addEventListener("click", function() {
+            document.querySelectorAll(".side-btn").forEach(function(b) { b.classList.remove("side-btn--active"); });
+            btn.classList.add("side-btn--active");
+            ORDER_SIDE = btn.dataset.side;
+            updateCreateForm();
+        });
+    });
+    document.getElementById("btnCreate").addEventListener("click", createOrder);
+    document.getElementById("orderPrice").addEventListener("input", updateSummary);
+    document.getElementById("orderAmount").addEventListener("input", updateSummary);
+    document.getElementById("fillAmount").addEventListener("input", updateFillCost);
+    document.getElementById("btnFill").addEventListener("click", executeFill);
+    document.getElementById("btnCancelFill").addEventListener("click", function() {
+        document.getElementById("fillPanel").style.display = "none";
+    });
+    updateCreateForm();
+}
+
+function updateCreateForm() {
+    var btn = document.getElementById("btnCreate");
+    var label = document.getElementById("summaryLabel");
+    var amtLabel = document.getElementById("orderAmountLabel");
+    if (ORDER_SIDE === "buy") {
+        btn.className = "btn btn--buy btn--full"; btn.innerText = "Place Buy Order";
+        label.innerText = "Total USDT to lock:"; amtLabel.innerText = "Amount of Minima to buy";
+    } else {
+        btn.className = "btn btn--sell btn--full"; btn.innerText = "Place Sell Order";
+        label.innerText = "Total Minima to lock:"; amtLabel.innerText = "Amount of Minima to sell";
+    }
+    updateSummary();
+}
+
+function updateSummary() {
+    var amt = parseFloat(document.getElementById("orderAmount").value) || 0;
+    var price = parseFloat(document.getElementById("orderPrice").value) || 0;
+    document.getElementById("totalSummary").innerText = ORDER_SIDE === "buy" ? (amt * price).toFixed(4) + " USDT" : amt.toFixed(4) + " MINIMA";
+}
+
+// -- Order Book --
+function refreshOrders() {
+    if (!SCRIPT_ADDR) return;
+    MDS.cmd("coins address:" + SCRIPT_ADDR, function(res) {
+        var orderCoins = (res.status && res.response) ? res.response : [];
+        MDS.log("Order coins: " + orderCoins.length);
+        parseOrderCoins(orderCoins);
+    });
+}
+
+function getState(coin, port) {
+    for (var i = 0; i < coin.state.length; i++) {
+        if (coin.state[i].port === port) return coin.state[i].data;
+    }
+    return "";
+}
+
+function parseOrderCoins(coins) {
+    ORDERS = [];
+    coins.forEach(function(coin) {
+        if (!coin.state || coin.state.length < 4) return;
+        var ownerkey = getState(coin, 0);
+        var wantAddr = getState(coin, 1);
+        var wantAmt = getState(coin, 2);
+        var wantTok = getState(coin, 3);
+        var oid = getState(coin, 4);
+        var sideNum = getState(coin, 5);
+        var price = getState(coin, 6);
+        if (!ownerkey || !wantAddr || !wantAmt) return;
+
+        var side = sideNum === "0" ? "buy" : "sell";
+        var displayAmt = (side === "buy" && coin.tokenamount) ? coin.tokenamount : coin.amount;
+
+        ORDERS.push({
+            coinid: coin.coinid,
+            amount: displayAmt,
+            rawAmount: coin.amount,
+            tokenamount: coin.tokenamount || coin.amount,
+            tokenid: coin.tokenid,
+            address: coin.address,
+            ownerkey: ownerkey,
+            wantAddr: wantAddr,
+            wantAmt: parseFloat(wantAmt),
+            wantTok: wantTok,
+            price: parseFloat(price) || 0,
+            orderId: oid,
+            side: side,
+            sideNum: sideNum,
+            isMine: ownerkey === MY_PUBKEY
+        });
+    });
+    renderOrderBook();
+    renderMyOrders();
+}
+
+function renderOrderBook() {
+    var el = document.getElementById("orderList");
+    if (ORDERS.length === 0) { el.innerHTML = '<div class="book__empty">No open orders</div>'; return; }
+    var sells = ORDERS.filter(function(o) { return o.side === "sell"; }).sort(function(a, b) { return b.price - a.price; });
+    var buys = ORDERS.filter(function(o) { return o.side === "buy"; }).sort(function(a, b) { return b.price - a.price; });
+    var all = sells.concat(buys);
+    var html = "";
+    all.forEach(function(o) {
+        var isBuy = o.side === "buy";
+        var minimaAmt = isBuy ? (parseFloat(o.amount) / o.price).toFixed(4) : parseFloat(o.amount).toFixed(4);
+        var usdtTotal = isBuy ? parseFloat(o.amount).toFixed(4) : (parseFloat(o.amount) * o.price).toFixed(4);
+        var actionLabel = isBuy ? "SELL" : "BUY";
+        var actionClass = isBuy ? "btn--sell" : "btn--buy";
+        var safeCoinId = o.coinid.replace(/[^a-fA-F0-9x]/g, '');
+        html += '<div class="book__row book__row--' + o.side + '">' +
+            '<span class="side-tag side-tag--' + o.side + '">' + o.side.toUpperCase() + '</span>' +
+            '<span class="price--' + o.side + '">' + fmtPrice(o.price) + '</span>' +
+            '<span>' + minimaAmt + '</span><span>' + usdtTotal + '</span>' +
+            '<span><button class="btn ' + actionClass + ' btn--sm" onclick="openFill(\'' + safeCoinId + '\')">' + actionLabel + '</button></span></div>';
+    });
+    el.innerHTML = html;
+}
+
+function renderMyOrders() {
+    var mine = ORDERS.filter(function(o) { return o.isMine; });
+    var el = document.getElementById("myOrders");
+    if (mine.length === 0) { el.innerHTML = '<div class="book__empty">No orders placed</div>'; return; }
+    var html = "";
+    mine.forEach(function(o) {
+        var isBuy = o.side === "buy";
+        var minimaAmt = isBuy ? (parseFloat(o.amount) / o.price).toFixed(4) : parseFloat(o.amount).toFixed(4);
+        var usdtTotal = isBuy ? parseFloat(o.amount).toFixed(4) : (parseFloat(o.amount) * o.price).toFixed(4);
+        var safeCoinId = o.coinid.replace(/[^a-fA-F0-9x]/g, '');
+        html += '<div class="book__row book__row--' + o.side + '">' +
+            '<span class="side-tag side-tag--' + o.side + '">' + o.side.toUpperCase() + '</span>' +
+            '<span class="price--' + o.side + '">' + fmtPrice(o.price) + '</span>' +
+            '<span>' + minimaAmt + '</span><span>' + usdtTotal + '</span>' +
+            '<span><button class="btn btn--cancel btn--sm" onclick="cancelOrder(\'' + safeCoinId + '\')">X</button></span></div>';
+    });
+    el.innerHTML = html;
+}
+
+// -- Create Order --
+// v0.2.0: pre-compute wantAmt so the contract just does VERIFYOUT
+function createOrder() {
+    var price = document.getElementById("orderPrice").value.trim();
+    var amt = document.getElementById("orderAmount").value.trim();
+    var statusEl = document.getElementById("createStatus");
+
+    if (!MY_PUBKEY || !MY_HEX_ADDR) { showErr(statusEl, "Identity not loaded"); return; }
+    if (!SCRIPT_ADDR) { showErr(statusEl, "Contract not registered"); return; }
+    if (!amt || !price || parseFloat(price) <= 0 || parseFloat(amt) <= 0) { showErr(statusEl, "Valid price and amount required"); return; }
+
+    statusEl.className = "status"; statusEl.innerText = "Creating " + ORDER_SIDE + " order...";
+
+    var orderId = "0x" + Date.now().toString(16).toUpperCase();
+    var sideNum = ORDER_SIDE === "buy" ? "0" : "1";
+
+    // Pre-compute what the owner wants to receive
+    var wantAmt, wantTok, lockAmt, lockTok;
+    if (ORDER_SIDE === "sell") {
+        // Selling Minima: lock Minima, want USDT
+        lockAmt = amt;
+        lockTok = "";  // Minima (0x00)
+        wantAmt = (parseFloat(amt) * parseFloat(price)).toFixed(8);
+        wantTok = USDT_ID;
+    } else {
+        // Buying Minima: lock USDT, want Minima
+        lockAmt = (parseFloat(amt) * parseFloat(price)).toFixed(8);
+        lockTok = USDT_ID;
+        wantAmt = amt;
+        wantTok = "0x00";
+    }
+
+    var stateObj = '{"0":"' + MY_PUBKEY + '","1":"' + MY_HEX_ADDR + '","2":"' + wantAmt + '","3":"' + wantTok + '","4":"' + orderId + '","5":"' + sideNum + '","6":"' + price + '"}';
+
+    var cmd = "send amount:" + lockAmt + " address:" + SCRIPT_ADDR + " state:" + stateObj;
+    if (lockTok) cmd += " tokenid:" + lockTok;
+
+    MDS.log("CREATE: " + cmd);
+    MDS.cmd(cmd, function(res) {
+        if (isPending(res)) { showPending(statusEl, "Order queued — approve in Pending Actions"); return; }
+        if (res.status) {
+            showOk(statusEl, "Order placed! Waiting for confirmation...");
+            document.getElementById("orderAmount").value = "";
+            document.getElementById("orderPrice").value = "";
+            document.getElementById("totalSummary").innerText = "0.00";
+        } else {
+            showErr(statusEl, res.error || "Failed to create order");
+        }
+    });
+}
+
+// -- Cancel Order --
+// Sign with owner key explicitly, then txnpost auto:true (runs txnbasics internally)
+function cancelOrder(coinid) {
+    var order = ORDERS.find(function(o) { return o.coinid === coinid; });
+    if (!order) return;
+    MDS.notify("Cancelling order...");
+
+    var txid = "cancel_" + Date.now();
+    var cancelAmt = order.amount;
+
+    MDS.cmd("txncreate id:" + txid, function(r0) {
+        if (!r0.status) { MDS.notify("Cancel failed: txncreate"); return; }
+
+        MDS.cmd("txninput id:" + txid + " coinid:" + coinid, function(r1) {
+            if (!r1.status) { showErr(null, "Cancel input failed", txid); return; }
+
+            var outCmd = "txnoutput id:" + txid + " amount:" + cancelAmt + " address:" + order.wantAddr + " storestate:false";
+            if (order.side === "buy") outCmd += " tokenid:" + USDT_ID;
+
+            MDS.cmd(outCmd, function(r2) {
+                if (!r2.status) { showErr(null, "Cancel output failed", txid); return; }
+
+                // Sign with owner key — triggers pending on restricted MDS
+                MDS.cmd("txnsign id:" + txid + " publickey:" + order.ownerkey, function(signRes) {
+                    if (isPending(signRes)) {
+                        showPending(null, "Cancel queued — approve in Pending Actions", txid, function(ok) {
+                            if (ok) { MDS.notify("Order cancelled!"); refreshOrders(); refreshBalances(); }
+                        });
+                        return;
+                    }
+                    // Native MDS: sign succeeded, continue
+                    MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(resArr) {
+                        var rp = Array.isArray(resArr) ? resArr[resArr.length - 1] : resArr;
+                        if (rp && rp.status) {
+                            MDS.notify("Order cancelled!");
+                            refreshOrders(); refreshBalances();
+                        } else {
+                            showErr(null, "Cancel failed: " + (rp ? rp.error || "unknown" : "no response"), txid);
+                        }
+                    });
+                });
+            });
+        });
+    });
+}
+
+// -- Fill Order --
+var FILL_ORDER = null;
+
+function openFill(coinid) {
+    FILL_ORDER = ORDERS.find(function(o) { return o.coinid === coinid; });
+    if (!FILL_ORDER) return;
+    var isBuy = FILL_ORDER.side === "buy";
+
+    if (isBuy) {
+        var maxMinima = FILL_ORDER.wantAmt;
+        document.getElementById("fillTitle").innerText = "Sell into Buy Order (Full Fill)";
+        document.getElementById("fillAvail").innerText = maxMinima.toFixed(4) + " MINIMA";
+        document.getElementById("fillAmountLabel").innerText = "Minima to sell (full order)";
+        document.getElementById("fillAmount").value = maxMinima.toFixed(4);
+        document.getElementById("fillCostUnit").innerText = "USDT you receive";
+        document.getElementById("fillCost").innerText = parseFloat(FILL_ORDER.amount).toFixed(4);
+        document.getElementById("btnFill").className = "btn btn--sell";
+        document.getElementById("btnFill").innerText = "Confirm Sell";
+    } else {
+        document.getElementById("fillTitle").innerText = "Buy from Sell Order (Full Fill)";
+        document.getElementById("fillAvail").innerText = parseFloat(FILL_ORDER.amount).toFixed(4) + " MINIMA";
+        document.getElementById("fillAmountLabel").innerText = "Minima to buy (full order)";
+        document.getElementById("fillAmount").value = parseFloat(FILL_ORDER.amount).toFixed(4);
+        document.getElementById("fillCostUnit").innerText = "USDT you pay";
+        document.getElementById("fillCost").innerText = FILL_ORDER.wantAmt.toFixed(4);
+        document.getElementById("btnFill").className = "btn btn--buy";
+        document.getElementById("btnFill").innerText = "Confirm Buy";
+    }
+
+    document.getElementById("fillPrice").innerText = fmtPrice(FILL_ORDER.price);
+    document.getElementById("fillStatus").innerText = "";
+    document.getElementById("fillPanel").style.display = "block";
+}
+
+function updateFillCost() {
+    if (!FILL_ORDER) return;
+    var amt = parseFloat(document.getElementById("fillAmount").value) || 0;
+    document.getElementById("fillCost").innerText = (amt * FILL_ORDER.price).toFixed(4);
+}
+
+function executeFill() {
+    if (!FILL_ORDER || FILL_IN_PROGRESS) return;
+    FILL_IN_PROGRESS = true;
+    if (FILL_ORDER.side === "sell") fillSellOrder();
+    else fillBuyOrder();
+}
+
+// Fill SELL order: I pay USDT (wantAmt), I get Minima
+// VERIFYOUT checks: output[@INPUT] = (wantAddr, wantAmt, wantTok=USDT)
+function fillSellOrder() {
+    var order = FILL_ORDER;
+    var statusEl = document.getElementById("fillStatus");
+    var orderAmt = parseFloat(order.amount);  // Minima in order
+    var usdtCost = order.wantAmt;             // USDT the seller wants
+    var txid = "fill_" + Date.now();
+
+    statusEl.className = "status"; statusEl.innerText = "Building fill transaction...";
+    MDS.log("FILL-SELL: minima=" + orderAmt + " usdt=" + usdtCost + " to=" + order.wantAddr);
+
+    MDS.cmd("txncreate id:" + txid, function(r0) {
+        if (!r0.status) { showErr(statusEl, "txncreate failed", txid); return; }
+
+        // Input 0: order coin (Minima at script)
+        MDS.cmd("txninput id:" + txid + " coinid:" + order.coinid, function(r1) {
+            if (!r1.status) { showErr(statusEl, "Order input failed", txid); return; }
+
+            // Find my USDT to pay
+            findCoins(USDT_ID, usdtCost, function(result) {
+                if (!result) { showErr(statusEl, "Insufficient USDT (need " + usdtCost + ")", txid); return; }
+
+                addMultipleInputs(txid, result.coins, 0, function(ok) {
+                    if (!ok) { showErr(statusEl, "USDT input failed", txid); return; }
+
+                    // Output 0: USDT to seller — VERIFYOUT checks this at @INPUT=0
+                    var out0 = "txnoutput id:" + txid + " amount:" + usdtCost + " address:" + order.wantAddr + " tokenid:" + USDT_ID + " storestate:false";
+                    MDS.cmd(out0, function(r2) {
+                        if (!r2.status) { showErr(statusEl, "Payment output failed", txid); return; }
+
+                        // Output 1: Minima to me
+                        MDS.cmd("txnoutput id:" + txid + " amount:" + orderAmt + " address:" + MY_HEX_ADDR + " storestate:false", function(r3) {
+                            if (!r3.status) { showErr(statusEl, "Minima output failed", txid); return; }
+
+                            // Output 2: USDT change (if any)
+                            var usdtChange = (result.total - usdtCost).toFixed(8);
+                            var doPost = function() {
+                                statusEl.innerText = "Signing...";
+                                var onFillComplete = function(ok) {
+                                    if (ok) {
+                                        FILL_IN_PROGRESS = false;
+                                        showOk(statusEl, "Fill mined!");
+                                        recordFill(order.orderId, "buy", order.price, orderAmt);
+                                        MDS.notify("Bought " + orderAmt + " MINIMA @ " + order.price);
+                                        setTimeout(function() { document.getElementById("fillPanel").style.display = "none"; }, 3000);
+                                    }
+                                };
+                                // Step 1: txnsign (triggers pending on restricted MDS)
+                                MDS.cmd("txnsign id:" + txid + " publickey:auto", function(signRes) {
+                                    MDS.log("FILL-SELL sign: status=" + (signRes ? signRes.status : "null") + " err=" + (signRes ? signRes.error || "none" : "no response"));
+                                    if (isPending(signRes)) {
+                                        // Restricted MDS: pending will be auto-completed on NEWBLOCK
+                                        showPending(statusEl, "Approve fill in Pending Actions — will auto-complete", txid, onFillComplete);
+                                        return;
+                                    }
+                                    // Native MDS: sign succeeded, continue with basics+post
+                                    statusEl.innerText = "Posting...";
+                                    MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(resArr) {
+                                        var rp = Array.isArray(resArr) ? resArr[resArr.length - 1] : resArr;
+                                        MDS.log("FILL-SELL post: status=" + (rp ? rp.status : "null") + " err=" + (rp ? rp.error || "none" : "no response"));
+                                        if (rp && rp.status) {
+                                            FILL_IN_PROGRESS = false;
+                                            showOk(statusEl, "Fill submitted! Waiting for mining...");
+                                            recordFill(order.orderId, "buy", order.price, orderAmt);
+                                            MDS.notify("Bought " + orderAmt + " MINIMA @ " + order.price);
+                                            setTimeout(function() {
+                                                document.getElementById("fillPanel").style.display = "none";
+                                                refreshOrders(); refreshBalances();
+                                            }, 3000);
+                                        } else {
+                                            showErr(statusEl, "Post failed: " + (rp ? rp.error || "unknown" : "no response"), txid);
+                                        }
+                                    });
+                                });
+                            };
+
+                            if (parseFloat(usdtChange) > 0.000001) {
+                                MDS.cmd("txnoutput id:" + txid + " amount:" + usdtChange + " address:" + MY_HEX_ADDR + " tokenid:" + USDT_ID + " storestate:false", function(r4) {
+                                    if (!r4.status) { showErr(statusEl, "Change output failed", txid); return; }
+                                    doPost();
+                                });
+                            } else { doPost(); }
+                        });
+                    });
+                });
+            });
+        });
+    });
+}
+
+// Fill BUY order: I send Minima (wantAmt), I get USDT
+// VERIFYOUT checks: output[@INPUT] = (wantAddr, wantAmt, wantTok=0x00)
+function fillBuyOrder() {
+    var order = FILL_ORDER;
+    var statusEl = document.getElementById("fillStatus");
+    var usdtAmt = parseFloat(order.amount);   // USDT in order
+    var minimaNeeded = order.wantAmt;         // Minima the buyer wants
+    var txid = "fill_" + Date.now();
+
+    statusEl.className = "status"; statusEl.innerText = "Building fill transaction...";
+    MDS.log("FILL-BUY: minima=" + minimaNeeded + " usdt=" + usdtAmt + " to=" + order.wantAddr);
+
+    MDS.cmd("txncreate id:" + txid, function(r0) {
+        if (!r0.status) { showErr(statusEl, "txncreate failed", txid); return; }
+
+        // Input 0: order coin (USDT at script)
+        MDS.cmd("txninput id:" + txid + " coinid:" + order.coinid, function(r1) {
+            if (!r1.status) { showErr(statusEl, "Order input failed", txid); return; }
+
+            // Find my Minima to pay
+            findCoins("0x00", minimaNeeded, function(result) {
+                if (!result) { showErr(statusEl, "Insufficient Minima (need " + minimaNeeded + ")", txid); return; }
+
+                addMultipleInputs(txid, result.coins, 0, function(ok) {
+                    if (!ok) { showErr(statusEl, "Minima input failed", txid); return; }
+
+                    // Output 0: Minima to buyer — VERIFYOUT checks this at @INPUT=0
+                    MDS.cmd("txnoutput id:" + txid + " amount:" + minimaNeeded + " address:" + order.wantAddr + " storestate:false", function(r2) {
+                        if (!r2.status) { showErr(statusEl, "Minima output failed", txid); return; }
+
+                        // Output 1: USDT to me
+                        MDS.cmd("txnoutput id:" + txid + " amount:" + usdtAmt + " address:" + MY_HEX_ADDR + " tokenid:" + USDT_ID + " storestate:false", function(r3) {
+                            if (!r3.status) { showErr(statusEl, "USDT output failed", txid); return; }
+
+                            // Output 2: Minima change (if any)
+                            var minChange = (result.total - minimaNeeded).toFixed(8);
+                            var doPost = function() {
+                                statusEl.innerText = "Signing...";
+                                var onFillComplete = function(ok) {
+                                    if (ok) {
+                                        FILL_IN_PROGRESS = false;
+                                        showOk(statusEl, "Fill mined!");
+                                        recordFill(order.orderId, "sell", order.price, minimaNeeded);
+                                        MDS.notify("Sold " + minimaNeeded + " MINIMA @ " + order.price);
+                                        setTimeout(function() { document.getElementById("fillPanel").style.display = "none"; }, 3000);
+                                    }
+                                };
+                                MDS.cmd("txnsign id:" + txid + " publickey:auto", function(signRes) {
+                                    MDS.log("FILL-BUY sign: status=" + (signRes ? signRes.status : "null") + " err=" + (signRes ? signRes.error || "none" : "no response"));
+                                    if (isPending(signRes)) {
+                                        showPending(statusEl, "Approve fill in Pending Actions — will auto-complete", txid, onFillComplete);
+                                        return;
+                                    }
+                                    statusEl.innerText = "Posting...";
+                                    MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(resArr) {
+                                        var rp = Array.isArray(resArr) ? resArr[resArr.length - 1] : resArr;
+                                        MDS.log("FILL-BUY post: status=" + (rp ? rp.status : "null") + " err=" + (rp ? rp.error || "none" : "no response"));
+                                        if (rp && rp.status) {
+                                            FILL_IN_PROGRESS = false;
+                                            showOk(statusEl, "Fill submitted! Waiting for mining...");
+                                            recordFill(order.orderId, "sell", order.price, minimaNeeded);
+                                            MDS.notify("Sold " + minimaNeeded + " MINIMA @ " + order.price);
+                                            setTimeout(function() {
+                                                document.getElementById("fillPanel").style.display = "none";
+                                                refreshOrders(); refreshBalances();
+                                            }, 3000);
+                                        } else {
+                                            showErr(statusEl, "Post failed: " + (rp ? rp.error || "unknown" : "no response"), txid);
+                                        }
+                                    });
+                                });
+                            };
+
+                            if (parseFloat(minChange) > 0.000001) {
+                                MDS.cmd("txnoutput id:" + txid + " amount:" + minChange + " address:" + MY_HEX_ADDR + " storestate:false", function(r4) {
+                                    if (!r4.status) { showErr(statusEl, "Change output failed", txid); return; }
+                                    doPost();
+                                });
+                            } else { doPost(); }
+                        });
+                    });
+                });
+            });
+        });
+    });
+}
+
+// -- Coin Helpers --
+function addMultipleInputs(txid, coins, idx, callback) {
+    if (idx >= coins.length) { callback(true); return; }
+    MDS.cmd("txninput id:" + txid + " coinid:" + coins[idx].coinid, function(res) {
+        if (!res.status) { callback(false); return; }
+        addMultipleInputs(txid, coins, idx + 1, callback);
+    });
+}
+
+function coinAmt(coin) {
+    if (coin.tokenid !== "0x00" && coin.tokenamount) return parseFloat(coin.tokenamount);
+    return parseFloat(coin.amount);
+}
+
+function findCoins(tokenid, minAmount, callback) {
+    MDS.cmd("coins relevant:true tokenid:" + tokenid, function(res) {
+        if (!res.status || !res.response || res.response.length === 0) { callback(null); return; }
+        var needed = parseFloat(minAmount);
+        var sorted = res.response.slice().sort(function(a, b) { return coinAmt(b) - coinAmt(a); });
+        if (coinAmt(sorted[0]) >= needed) { callback({ coins: [sorted[0]], total: coinAmt(sorted[0]) }); return; }
+        var selected = [], sum = 0;
+        for (var i = 0; i < sorted.length; i++) {
+            selected.push(sorted[i]); sum += coinAmt(sorted[i]);
+            if (sum >= needed) { callback({ coins: selected, total: sum }); return; }
+        }
+        callback(null);
+    });
+}
+
+// -- Fill History --
+function recordFill(orderId, side, price, amount) {
+    var total = (amount * price).toFixed(4);
+    var now = Date.now();
+    MDS.cmd("block", function(res) {
+        var bn = res.status ? parseInt(res.response.block) || 0 : 0;
+        MDS.sql(
+            "INSERT INTO fills (orderid, side, price, amount, total, block, timestamp) VALUES ('" +
+            sqlEsc(orderId) + "', '" + sqlEsc(side) + "', '" + sqlEsc(price) + "', '" + sqlEsc(amount) + "', '" + sqlEsc(total) + "', " + bn + ", " + now + ")",
+            function() { loadFills(); }
+        );
+    });
+}
+
+function loadFills(callback) {
+    MDS.sql("SELECT * FROM fills ORDER BY timestamp DESC LIMIT 200", function(res) {
+        if (!res.status) return;
+        FILLS = res.rows || [];
+        renderFillHistory();
+        if (callback) callback();
+    });
+}
+
+function renderFillHistory() {
+    var el = document.getElementById("historyList");
+    if (FILLS.length === 0) { el.innerHTML = '<div class="book__empty">No fills yet</div>'; return; }
+    var html = "";
+    FILLS.forEach(function(f) {
+        var time = new Date(parseInt(f.TIMESTAMP)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        var sideClass = f.SIDE === "buy" ? "side-tag--buy" : "side-tag--sell";
+        html += '<div class="history__row">' +
+            '<span>' + time + '</span>' +
+            '<span class="side-tag ' + sideClass + '">' + f.SIDE.toUpperCase() + '</span>' +
+            '<span>' + fmtPrice(parseFloat(f.PRICE)) + '</span>' +
+            '<span>' + parseFloat(f.AMOUNT).toFixed(4) + '</span>' +
+            '<span>' + parseFloat(f.TOTAL).toFixed(4) + '</span></div>';
+    });
+    el.innerHTML = html;
+}
+
+// -- Charts --
+var priceChartObj = null;
+var volumeChartObj = null;
+var geckoChartObj = null;
+
+function renderCharts() {
+    loadFills(buildCharts);
+    buildGeckoChart();
+}
+
+function buildCharts() {
+    if (FILLS.length === 0) return;
+    var reversed = FILLS.slice().reverse();
+    var labels = reversed.map(function(f) { return new Date(parseInt(f.TIMESTAMP)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); });
+    var prices = reversed.map(function(f) { return parseFloat(f.PRICE); });
+    var volumes = reversed.map(function(f) { return parseFloat(f.AMOUNT); });
+    var pointBorderColors = reversed.map(function(f) { return f.SIDE === "buy" ? "#00e676" : "#ff3b5c"; });
+    var C = { accent: "#b45309", accentFill: "rgba(180,83,9,0.08)", grid: "rgba(216,212,204,0.6)", text: "#7a7568", greenBar: "rgba(22,163,74,0.35)", redBar: "rgba(220,38,38,0.3)" };
+    var barColors = reversed.map(function(f) { return f.SIDE === "buy" ? C.greenBar : C.redBar; });
+
+    if (priceChartObj) priceChartObj.destroy();
+    priceChartObj = new Chart(document.getElementById("priceChart").getContext("2d"), {
+        type: "line", data: { labels: labels, datasets: [{ label: "Fill Price (USDT)", data: prices,
+            borderColor: C.accent, backgroundColor: C.accentFill, borderWidth: 2,
+            pointRadius: 6, pointHoverRadius: 8, pointBackgroundColor: C.accent,
+            pointBorderColor: pointBorderColors, pointBorderWidth: 2, fill: true, tension: 0.1 }] },
+        options: { responsive: true, plugins: { legend: { display: false },
+            title: { display: true, text: "LIMIT FILLS — MINIMA/USDT", color: C.text, font: { family: "Courier New", size: 11 } } },
+            scales: { x: { grid: { color: C.grid }, ticks: { color: C.text, font: { size: 9 }, maxRotation: 45 } },
+                y: { grid: { color: C.grid }, ticks: { color: C.text, font: { size: 9 } } } } }
+    });
+
+    if (volumeChartObj) volumeChartObj.destroy();
+    volumeChartObj = new Chart(document.getElementById("volumeChart").getContext("2d"), {
+        type: "bar", data: { labels: labels, datasets: [{ label: "Volume (MINIMA)", data: volumes,
+            backgroundColor: barColors, borderColor: barColors, borderWidth: 1 }] },
+        options: { responsive: true, plugins: { legend: { display: false },
+            title: { display: true, text: "FILL VOLUME", color: C.text, font: { family: "Courier New", size: 11 } } },
+            scales: { x: { grid: { color: C.grid }, ticks: { color: C.text, font: { size: 9 }, maxRotation: 45 } },
+                y: { grid: { color: C.grid }, ticks: { color: C.text, font: { size: 9 } } } } }
+    });
+}
+
+function buildGeckoChart() {
+    fetchGeckoChart(function(data) {
+        if (!data || !data.prices) return;
+        var prices = data.prices;
+        var labels = prices.map(function(p) {
+            var d = new Date(p[0]);
+            return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + d.toLocaleTimeString([], { hour: "2-digit" });
+        });
+        var vals = prices.map(function(p) { return p[1]; });
+
+        // Sample every Nth point to keep chart clean
+        var step = Math.max(1, Math.floor(prices.length / 100));
+        var sampledLabels = [], sampledVals = [];
+        for (var i = 0; i < labels.length; i += step) {
+            sampledLabels.push(labels[i]);
+            sampledVals.push(vals[i]);
+        }
+
+        var canvas = document.getElementById("geckoChart");
+        if (!canvas) return;
+        if (geckoChartObj) geckoChartObj.destroy();
+        var C = { grid: "rgba(216,212,204,0.6)", text: "#7a7568" };
+        geckoChartObj = new Chart(canvas.getContext("2d"), {
+            type: "line", data: { labels: sampledLabels, datasets: [{ label: "MINIMA/USD (CoinGecko)", data: sampledVals,
+                borderColor: "#2563eb", backgroundColor: "rgba(37,99,235,0.06)", borderWidth: 2,
+                pointRadius: 0, fill: true, tension: 0.3 }] },
+            options: { responsive: true, plugins: { legend: { display: false },
+                title: { display: true, text: "MINIMA/USD — 7 DAY (COINGECKO)", color: C.text, font: { family: "Courier New", size: 11 } } },
+                scales: { x: { grid: { color: C.grid }, ticks: { color: C.text, font: { size: 8 }, maxRotation: 45, maxTicksLimit: 12 } },
+                    y: { grid: { color: C.grid }, ticks: { color: C.text, font: { size: 9 } } } } }
+        });
+    });
+}

@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Limit — On-Chain DEX</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<div class="shell">
+
+    <!-- Header -->
+    <header class="hdr">
+        <div class="hdr__logo">
+            <span class="hdr__mark">◇</span>
+            <span class="hdr__title">LIMIT</span>
+            <span class="hdr__sub">on-chain dex</span>
+        </div>
+        <div class="hdr__wallet">
+            <span class="hdr__bal" id="geckoPrice">—</span>
+            <span class="hdr__bal" id="minimaBalance">— MINIMA</span>
+            <span class="hdr__bal" id="usdtBalance">— USDT</span>
+        </div>
+        <div class="hdr__status">
+            <button class="btn btn--ghost btn--sm" onclick="refreshOrders();refreshBalances();">↻</button>
+            <span class="hdr__dot"></span>
+            <span id="blockHeight">—</span>
+        </div>
+    </header>
+
+    <!-- Tab Navigation -->
+    <nav class="tabs">
+        <button class="tab tab--active" data-view="orders">Order Book</button>
+        <button class="tab" data-view="create">New Order</button>
+        <button class="tab" data-view="chart">Price Chart</button>
+    </nav>
+
+    <!-- VIEW: Order Book -->
+    <section id="view-orders" class="view view--active">
+        <div class="book">
+            <div class="book__legend">
+                <span class="legend legend--buy">BUY</span>
+                <span class="legend legend--sell">SELL</span>
+                <span class="legend legend--fill">FILLED</span>
+            </div>
+            <div class="book__head">
+                <span>Side</span>
+                <span>Price (USDT)</span>
+                <span>Amount (MINIMA)</span>
+                <span>Total (USDT)</span>
+                <span></span>
+            </div>
+            <div id="orderList" class="book__body">
+                <div class="book__empty">No open orders</div>
+            </div>
+        </div>
+
+        <!-- Fill Order Panel -->
+        <div id="fillPanel" class="fill" style="display:none;">
+            <h3 class="fill__title" id="fillTitle">Fill Order</h3>
+            <div class="fill__info">
+                <span>Price: <strong id="fillPrice">—</strong> USDT/MINIMA</span>
+                <span>Available: <strong id="fillAvail">—</strong></span>
+            </div>
+            <label class="field">
+                <span class="field__label" id="fillAmountLabel">Amount (MINIMA)</span>
+                <input type="number" id="fillAmount" class="field__input" step="0.001" min="0.001" placeholder="0.00" readonly>
+            </label>
+            <div class="fill__cost">
+                Cost: <strong id="fillCost">0.00</strong> <span id="fillCostUnit">USDT</span>
+            </div>
+            <div class="fill__actions">
+                <button id="btnFill" class="btn btn--buy">Confirm</button>
+                <button id="btnCancelFill" class="btn btn--ghost">Cancel</button>
+            </div>
+            <div id="fillStatus" class="status"></div>
+        </div>
+    </section>
+
+    <!-- VIEW: Create Order -->
+    <section id="view-create" class="view">
+        <h2 class="view__title">Place a Limit Order</h2>
+        <p class="view__desc">MINIMA/USDT — lock funds on-chain at your price. Full fill only.</p>
+
+        <!-- Buy/Sell toggle -->
+        <div class="side-toggle">
+            <button class="side-btn side-btn--buy side-btn--active" data-side="buy">BUY MINIMA</button>
+            <button class="side-btn side-btn--sell" data-side="sell">SELL MINIMA</button>
+        </div>
+
+        <label class="field">
+            <span class="field__label">Price per Minima (USDT)</span>
+            <input type="number" id="orderPrice" class="field__input" step="0.0001" min="0.0001" placeholder="0.00">
+        </label>
+        <label class="field">
+            <span class="field__label" id="orderAmountLabel">Amount of Minima</span>
+            <input type="number" id="orderAmount" class="field__input" step="0.001" min="0.001" placeholder="0.00">
+        </label>
+
+        <div class="create__summary">
+            <span id="summaryLabel">Total USDT to lock:</span> <strong id="totalSummary">0.00</strong>
+        </div>
+
+        <button id="btnCreate" class="btn btn--buy btn--full">Place Buy Order</button>
+        <div id="createStatus" class="status"></div>
+
+        <h3 class="view__subtitle">Your Open Orders</h3>
+        <div id="myOrders" class="book__body">
+            <div class="book__empty">No orders placed</div>
+        </div>
+    </section>
+
+    <!-- VIEW: Price Chart -->
+    <section id="view-chart" class="view">
+        <h2 class="view__title">Trade History</h2>
+        <p class="view__desc">Filled limit orders — yellow points mark each settlement.</p>
+        <div class="chart-wrap">
+            <canvas id="geckoChart"></canvas>
+        </div>
+        <div class="chart-wrap">
+            <canvas id="priceChart"></canvas>
+        </div>
+        <div class="chart-wrap">
+            <canvas id="volumeChart"></canvas>
+        </div>
+        <div id="fillHistory" class="history">
+            <div class="history__head">
+                <span>Time</span>
+                <span>Side</span>
+                <span>Price</span>
+                <span>Amount</span>
+                <span>Total</span>
+            </div>
+            <div id="historyList" class="history__body">
+                <div class="book__empty">No fills yet</div>
+            </div>
+        </div>
+    </section>
+
+</div>
+
+<script src="mds.js"></script>
+<script src="lint.js"></script>
+</body>
+</html>
