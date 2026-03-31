@@ -17,12 +17,12 @@
             <span class="hdr__mark">◇</span>
             <span class="hdr__title">LIMIT</span>
             <span class="hdr__sub">on-chain dex</span>
+            <a href="https://mxusd.global" target="_blank" rel="noopener" class="hdr__bridge">BRIDGE USDT ↗</a>
         </div>
         <div class="hdr__wallet">
             <span class="hdr__bal" id="geckoPrice">—</span>
             <span class="hdr__bal" id="minimaBalance">— MINIMA</span>
             <span class="hdr__bal" id="usdtBalance">— USDT</span>
-            <a href="https://mxusd.global" target="_blank" rel="noopener" class="hdr__bridge">BRIDGE USDT</a>
         </div>
         <div class="hdr__status">
             <button class="btn btn--ghost btn--sm" onclick="refreshOrders();refreshBalances();">↻</button>
@@ -111,6 +111,7 @@
         <div id="myOrders" class="book__body">
             <div class="book__empty">No orders placed</div>
         </div>
+        <div id="cancelStatus" class="status"></div>
 
         <div class="bridge-banner">
             <span class="bridge-banner__icon">↗</span>
@@ -150,7 +151,7 @@
 
     <!-- Footer -->
     <footer class="footer">
-        <span>Limit v0.2.0</span>
+        <span>Limit v0.2.3</span>
         <span class="footer__sep">|</span>
         <span>VERIFYOUT Smart Contract</span>
         <span class="footer__sep">|</span>

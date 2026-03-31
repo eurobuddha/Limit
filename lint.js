@@ -36,6 +36,7 @@ var FILL_IN_PROGRESS = false;
 var GECKO_PRICE = null;
 var PENDING_TXID = null;       // txid awaiting pending approval
 var PENDING_CALLBACK = null;   // callback to run after fill completes
+var CANCEL_STATUS = {};        // coinid → "pending"|"confirming"|"confirmed"
 
 // -- Init --
 MDS.init(function(msg) {
@@ -196,6 +197,11 @@ function checkPendingComplete() {
         if (proofs && proofs.length > 0) return; // already done
         // Signatures present, proofs missing — complete the transaction!
         MDS.log("PENDING APPROVED: completing " + txid + " with txnbasics+txnpost");
+        // Mark any cancel as confirming
+        for (var cid in CANCEL_STATUS) { if (CANCEL_STATUS[cid] === "pending") CANCEL_STATUS[cid] = "confirming"; }
+        renderMyOrders();
+        var csEl = document.getElementById("cancelStatus");
+        if (csEl) { csEl.className = "status status--warn"; csEl.innerText = "Confirming cancellation..."; }
         var cb = PENDING_CALLBACK;
         PENDING_TXID = null;
         PENDING_CALLBACK = null;
@@ -238,8 +244,8 @@ function refreshBalances() {
         if (!res.status) return;
         var minBal = "0", usdtBal = "0";
         (res.response || []).forEach(function(b) {
-            if (b.tokenid === "0x00") minBal = b.confirmed;
-            if (b.tokenid === USDT_ID) usdtBal = b.confirmed;
+            if (b.tokenid === "0x00") minBal = b.sendable;
+            if (b.tokenid === USDT_ID) usdtBal = b.sendable;
         });
         document.getElementById("minimaBalance").innerText = parseFloat(minBal).toFixed(2) + " MINIMA";
         document.getElementById("usdtBalance").innerText = parseFloat(usdtBal).toFixed(2) + " USDT";
@@ -422,11 +428,22 @@ function renderMyOrders() {
         var minimaAmt = isBuy ? (parseFloat(o.amount) / o.price).toFixed(4) : parseFloat(o.amount).toFixed(4);
         var usdtTotal = isBuy ? parseFloat(o.amount).toFixed(4) : (parseFloat(o.amount) * o.price).toFixed(4);
         var safeCoinId = o.coinid.replace(/[^a-fA-F0-9x]/g, '');
+        var cancelState = CANCEL_STATUS[o.coinid];
+        var actionHtml;
+        if (cancelState === "pending") {
+            actionHtml = '<span class="cancel-status cancel-status--pending">PENDING</span>';
+        } else if (cancelState === "confirming") {
+            actionHtml = '<span class="cancel-status cancel-status--confirming">CANCELLING...</span>';
+        } else if (cancelState === "confirmed") {
+            actionHtml = '<span class="cancel-status cancel-status--confirmed">CANCELLED</span>';
+        } else {
+            actionHtml = '<button class="btn btn--cancel btn--sm" onclick="cancelOrder(\'' + safeCoinId + '\')">X</button>';
+        }
         html += '<div class="book__row book__row--' + o.side + '">' +
             '<span class="side-tag side-tag--' + o.side + '">' + o.side.toUpperCase() + '</span>' +
             '<span class="price--' + o.side + '">' + fmtPrice(o.price) + '</span>' +
             '<span>' + minimaAmt + '</span><span>' + usdtTotal + '</span>' +
-            '<span><button class="btn btn--cancel btn--sm" onclick="cancelOrder(\'' + safeCoinId + '\')">X</button></span></div>';
+            '<span>' + actionHtml + '</span></div>';
     });
     el.innerHTML = html;
 }
@@ -507,19 +524,41 @@ function cancelOrder(coinid) {
                 // Sign with owner key — triggers pending on restricted MDS
                 MDS.cmd("txnsign id:" + txid + " publickey:" + order.ownerkey, function(signRes) {
                     if (isPending(signRes)) {
-                        showPending(null, "Cancel queued — approve in Pending Actions", txid, function(ok) {
-                            if (ok) { MDS.notify("Order cancelled!"); refreshOrders(); refreshBalances(); }
+                        CANCEL_STATUS[coinid] = "pending";
+                        renderMyOrders();
+                        var csEl = document.getElementById("cancelStatus");
+                        csEl.className = "status status--warn";
+                        csEl.innerText = "Cancel pending — approve in your node's Pending Actions";
+                        showPending(null, null, txid, function(ok) {
+                            if (ok) {
+                                CANCEL_STATUS[coinid] = "confirmed";
+                                renderMyOrders();
+                                csEl.className = "status status--ok";
+                                csEl.innerText = "Order cancelled!";
+                                refreshOrders(); refreshBalances();
+                            }
                         });
                         return;
                     }
                     // Native MDS: sign succeeded, continue
+                    CANCEL_STATUS[coinid] = "confirming";
+                    renderMyOrders();
+                    var csEl = document.getElementById("cancelStatus");
+                    csEl.className = "status status--warn";
+                    csEl.innerText = "Confirming cancellation...";
                     MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(resArr) {
                         var rp = Array.isArray(resArr) ? resArr[resArr.length - 1] : resArr;
                         if (rp && rp.status) {
-                            MDS.notify("Order cancelled!");
+                            CANCEL_STATUS[coinid] = "confirmed";
+                            renderMyOrders();
+                            csEl.className = "status status--ok";
+                            csEl.innerText = "Order cancelled!";
                             refreshOrders(); refreshBalances();
                         } else {
-                            showErr(null, "Cancel failed: " + (rp ? rp.error || "unknown" : "no response"), txid);
+                            delete CANCEL_STATUS[coinid];
+                            renderMyOrders();
+                            csEl.className = "status status--err";
+                            csEl.innerText = "Cancel failed: " + (rp ? rp.error || "unknown" : "no response");
                         }
                     });
                 });

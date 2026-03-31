@@ -48,7 +48,7 @@ body {
     flex-wrap: wrap;
     gap: 10px;
 }
-.hdr__logo { display: flex; align-items: baseline; gap: 10px; }
+.hdr__logo { display: flex; align-items: center; gap: 10px; }
 .hdr__mark { color: var(--accent); font-size: 22px; }
 .hdr__title {
     font-family: var(--mono);
@@ -385,6 +385,34 @@ body {
     transition: opacity .15s;
 }
 .hdr__bridge:hover { opacity: .85; }
+
+/* Cancel status labels in My Orders */
+.cancel-status {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    padding: 3px 8px;
+    border-radius: var(--radius);
+}
+.cancel-status--pending {
+    background: #fbbf24;
+    color: #1a1a2e;
+    animation: pulse-pending 1.5s ease-in-out infinite;
+}
+.cancel-status--confirming {
+    background: #60a5fa;
+    color: #1a1a2e;
+    animation: pulse-pending 1s ease-in-out infinite;
+}
+.cancel-status--confirmed {
+    background: #34d399;
+    color: #1a1a2e;
+}
+@keyframes pulse-pending {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
 
 /* Bridge banner on Create tab */
 .bridge-banner {
