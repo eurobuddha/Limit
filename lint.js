@@ -480,6 +480,20 @@ function createOrder() {
         wantTok = "0x00";
     }
 
+    // Check sendable balance before attempting
+    MDS.cmd("balance", function(balRes) {
+        if (!balRes.status) { showErr(statusEl, "Could not check balance"); return; }
+        var sendable = "0";
+        var checkTok = lockTok || "0x00";
+        (balRes.response || []).forEach(function(b) {
+            if (b.tokenid === checkTok) sendable = b.sendable;
+        });
+        if (parseFloat(sendable) < parseFloat(lockAmt)) {
+            var unit = lockTok ? "USDT" : "MINIMA";
+            showErr(statusEl, "Insufficient sendable " + unit + " — need " + lockAmt + ", have " + parseFloat(sendable).toFixed(4));
+            return;
+        }
+
     var stateObj = '{"0":"' + MY_PUBKEY + '","1":"' + MY_HEX_ADDR + '","2":"' + wantAmt + '","3":"' + wantTok + '","4":"' + orderId + '","5":"' + sideNum + '","6":"' + price + '"}';
 
     var cmd = "send amount:" + lockAmt + " address:" + SCRIPT_ADDR + " state:" + stateObj;
@@ -497,6 +511,7 @@ function createOrder() {
             showErr(statusEl, res.error || "Failed to create order");
         }
     });
+    }); // end balance check
 }
 
 // -- Cancel Order --
