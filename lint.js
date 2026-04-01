@@ -51,8 +51,7 @@ MDS.init(function(msg) {
 });
 
 function initApp() {
-    // Register with track:false by default — we toggle trackall on/off in refreshOrders()
-    MDS.cmd('newscript script:"' + SCRIPT + '" track:false', function(res) {
+    MDS.cmd('newscript script:"' + SCRIPT + '" trackall:true', function(res) {
         if (res.status) {
             SCRIPT_ADDR = res.response.address;
             MDS.log("Limit v0.2.8 contract: " + SCRIPT_ADDR);
@@ -361,18 +360,11 @@ function updateSummary() {
 // -- Order Book --
 function refreshOrders() {
     if (!SCRIPT_ADDR) return;
-    // Toggle trackall ON to discover all order coins, read them, then toggle OFF
-    // so coins don't persist as "locked" in the wallet between sessions
-    MDS.cmd('newscript script:"' + SCRIPT + '" trackall:true', function() {
-        MDS.cmd("coins address:" + SCRIPT_ADDR, function(res) {
-            var orderCoins = (res.status && res.response) ? res.response : [];
-            MDS.log("Order coins: " + orderCoins.length);
-            parseOrderCoins(orderCoins);
-            // Turn off trackall so no new coins get auto-tracked between refreshes
-            MDS.cmd('newscript script:"' + SCRIPT + '" track:false');
-            // Untrack foreign coins that were just discovered
-            untrackForeignOrders(orderCoins);
-        });
+    MDS.cmd("coins address:" + SCRIPT_ADDR, function(res) {
+        var orderCoins = (res.status && res.response) ? res.response : [];
+        MDS.log("Order coins: " + orderCoins.length);
+        parseOrderCoins(orderCoins);
+        untrackForeignOrders(orderCoins);
     });
 }
 
