@@ -1,5 +1,5 @@
 /**
- * Limit v0.3.1 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v0.3.2 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
@@ -55,7 +55,7 @@ function initApp() {
     MDS.cmd('newscript script:"' + SCRIPT + '" trackall:true', function(res) {
         if (res.status) {
             SCRIPT_ADDR = res.response.address;
-            MDS.log("Limit v0.3.1 contract: " + SCRIPT_ADDR);
+            MDS.log("Limit v0.3.2 contract: " + SCRIPT_ADDR);
         } else {
             MDS.log("SCRIPT ERROR: " + JSON.stringify(res.error));
         }
@@ -147,7 +147,7 @@ function finishInit() {
             "  `timestamp` bigint NOT NULL" +
             ")", function() {
                 DB_READY = true;
-                MDS.log("Limit v0.3.1 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
+                MDS.log("Limit v0.3.2 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
                 refreshOrders(); refreshBalances(); loadFills();
             }
         );
@@ -351,10 +351,18 @@ function refreshOrders() {
 }
 
 function exitDex() {
-    MDS.cmd('newscript script:"' + SCRIPT + '" track:false', function() {
-        MDS.log("Limit: tracking disabled on exit");
-        document.getElementById("exitModal").style.display = "flex";
+    // Stop future tracking
+    MDS.cmd('newscript script:"' + SCRIPT + '" track:false');
+    // Untrack all foreign order coins immediately
+    var count = 0;
+    ORDERS.forEach(function(o) {
+        if (!o.isMine) {
+            MDS.cmd("cointrack enable:false coinid:" + o.coinid);
+            count++;
+        }
     });
+    MDS.log("Limit: exit — untracked " + count + " foreign coins, tracking disabled");
+    document.getElementById("exitModal").style.display = "flex";
 }
 
 function getState(coin, port) {
