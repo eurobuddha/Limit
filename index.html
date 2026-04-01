@@ -152,7 +152,7 @@
 
     <!-- Footer -->
     <footer class="footer">
-        <span>Limit v0.3.2</span>
+        <span>Limit v0.3.3</span>
         <span class="footer__sep">|</span>
         <span>VERIFYOUT Smart Contract</span>
         <span class="footer__sep">|</span>
@@ -161,13 +161,15 @@
         <a href="https://github.com/eurobuddha/Limit" target="_blank" rel="noopener" class="footer__link">GitHub</a>
     </footer>
 
+
+</div>
+
 <!-- Exit Modal -->
 <div id="exitModal" class="modal" style="display:none;">
     <div class="modal__box">
-        <h3 class="modal__title">Tracking Cleared</h3>
-        <p class="modal__text">
-            All order book coins have been untracked from your node.
-            They will no longer appear as locked in your wallet.
+        <h3 class="modal__title">Tracking Disabled</h3>
+        <p class="modal__text" id="exitMsg">
+            Coin tracking has been disabled on your node.
         </p>
         <p class="modal__text">
             Your own orders are unaffected.
@@ -178,8 +180,6 @@
         </p>
         <button class="btn btn--ghost btn--full" onclick="document.getElementById('exitModal').style.display='none'">OK</button>
     </div>
-</div>
-
 </div>
 
 <script src="mds.js"></script>
