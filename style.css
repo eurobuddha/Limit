@@ -77,13 +77,6 @@ body {
     padding: 5px 12px;
     box-shadow: var(--shadow-sm);
 }
-.hdr__locked {
-    font-family: var(--mono);
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--dim);
-    margin-left: -6px;
-}
 .hdr__status {
     display: flex;
     align-items: center;
