@@ -469,6 +469,40 @@ body {
 }
 .footer__link:hover { text-decoration: underline; }
 
+/* Exit Modal */
+.modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+}
+.modal__box {
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px 24px;
+    max-width: 380px;
+    width: 90%;
+    box-shadow: 0 8px 32px rgba(0,0,0,.15);
+}
+.modal__title {
+    font-family: var(--mono);
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 14px;
+    color: var(--text);
+}
+.modal__text {
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text);
+    margin-bottom: 10px;
+}
+.modal__dim { color: var(--dim); font-size: 13px; }
+
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }

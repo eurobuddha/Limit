@@ -1,5 +1,5 @@
 /**
- * Limit v0.3.0 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v0.3.1 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
@@ -52,10 +52,10 @@ MDS.init(function(msg) {
 });
 
 function initApp() {
-    MDS.cmd('newscript script:"' + SCRIPT + '" track:false', function(res) {
+    MDS.cmd('newscript script:"' + SCRIPT + '" trackall:true', function(res) {
         if (res.status) {
             SCRIPT_ADDR = res.response.address;
-            MDS.log("Limit v0.3.0 contract: " + SCRIPT_ADDR);
+            MDS.log("Limit v0.3.1 contract: " + SCRIPT_ADDR);
         } else {
             MDS.log("SCRIPT ERROR: " + JSON.stringify(res.error));
         }
@@ -147,7 +147,7 @@ function finishInit() {
             "  `timestamp` bigint NOT NULL" +
             ")", function() {
                 DB_READY = true;
-                MDS.log("Limit v0.3.0 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
+                MDS.log("Limit v0.3.1 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
                 refreshOrders(); refreshBalances(); loadFills();
             }
         );
@@ -343,15 +343,17 @@ function updateSummary() {
 // -- Order Book --
 function refreshOrders() {
     if (!SCRIPT_ADDR) return;
-    // Temporarily enable trackall to discover all order coins, then disable
-    MDS.cmd('newscript script:"' + SCRIPT + '" trackall:true', function() {
-        MDS.cmd("coins address:" + SCRIPT_ADDR, function(res) {
-            var orderCoins = (res.status && res.response) ? res.response : [];
-            MDS.log("Order coins: " + orderCoins.length);
-            parseOrderCoins(orderCoins);
-            // Disable tracking so coins don't persist as locked in wallet
-            MDS.cmd('newscript script:"' + SCRIPT + '" track:false');
-        });
+    MDS.cmd("coins address:" + SCRIPT_ADDR, function(res) {
+        var orderCoins = (res.status && res.response) ? res.response : [];
+        MDS.log("Order coins: " + orderCoins.length);
+        parseOrderCoins(orderCoins);
+    });
+}
+
+function exitDex() {
+    MDS.cmd('newscript script:"' + SCRIPT + '" track:false', function() {
+        MDS.log("Limit: tracking disabled on exit");
+        document.getElementById("exitModal").style.display = "flex";
     });
 }
 

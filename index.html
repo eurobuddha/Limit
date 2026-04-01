@@ -28,6 +28,7 @@
             <button class="btn btn--ghost btn--sm" onclick="refreshOrders();refreshBalances();">↻</button>
             <span class="hdr__dot"></span>
             <span id="blockHeight">—</span>
+            <button class="btn btn--ghost btn--sm" onclick="exitDex()">EXIT</button>
         </div>
     </header>
 
@@ -151,7 +152,7 @@
 
     <!-- Footer -->
     <footer class="footer">
-        <span>Limit v0.3.0</span>
+        <span>Limit v0.3.1</span>
         <span class="footer__sep">|</span>
         <span>VERIFYOUT Smart Contract</span>
         <span class="footer__sep">|</span>
@@ -159,6 +160,25 @@
         <span class="footer__sep">|</span>
         <a href="https://github.com/eurobuddha/Limit" target="_blank" rel="noopener" class="footer__link">GitHub</a>
     </footer>
+
+<!-- Exit Modal -->
+<div id="exitModal" class="modal" style="display:none;">
+    <div class="modal__box">
+        <h3 class="modal__title">Tracking Stopped</h3>
+        <p class="modal__text">
+            Order book coin tracking has been disabled on your node.
+            No new order coins will appear as locked in your wallet.
+        </p>
+        <p class="modal__text">
+            Any coins tracked during this session will automatically
+            disappear as those orders are filled or cancelled.
+        </p>
+        <p class="modal__text modal__dim">
+            Tracking resumes next time you open the DEX.
+        </p>
+        <button class="btn btn--ghost btn--full" onclick="document.getElementById('exitModal').style.display='none'">OK</button>
+    </div>
+</div>
 
 </div>
 
