@@ -77,6 +77,13 @@ body {
     padding: 5px 12px;
     box-shadow: var(--shadow-sm);
 }
+.hdr__locked {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--dim);
+    margin-left: -6px;
+}
 .hdr__status {
     display: flex;
     align-items: center;
@@ -244,7 +251,7 @@ body {
 .btn--sell { background: var(--red); color: #fff; border-color: var(--red); }
 .btn--sell:hover { background: #b91c1c; }
 .btn--full { width: 100%; margin-top: 14px; padding: 14px; font-size: 14px; }
-.btn--sm { padding: 6px 12px; font-size: 11px; }
+.btn--sm { padding: 6px 0; font-size: 11px; width: 52px; text-align: center; }
 .btn--ghost { background: none; color: var(--dim); border-color: var(--border); }
 .btn--ghost:hover { color: var(--text); border-color: var(--text); }
 .btn--cancel { background: none; color: var(--red); border-color: var(--red); }
