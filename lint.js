@@ -364,19 +364,6 @@ function refreshOrders() {
         var orderCoins = (res.status && res.response) ? res.response : [];
         MDS.log("Order coins: " + orderCoins.length);
         parseOrderCoins(orderCoins);
-        untrackForeignOrders(orderCoins);
-    });
-}
-
-// Untrack coins that don't belong to this user — removes them from the
-// wallet's "locked" balance display
-function untrackForeignOrders(coins) {
-    coins.forEach(function(coin) {
-        if (!coin.state || coin.state.length < 1) return;
-        var ownerkey = getState(coin, 0);
-        if (ownerkey && !isMyKey(ownerkey)) {
-            MDS.cmd("cointrack enable:false coinid:" + coin.coinid);
-        }
     });
 }
 
