@@ -1,11 +1,11 @@
 /**
- * Limit v0.2.8 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v0.2.9 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
- * KISS VM Smart Contract (from docs.minima.global):
+ * Supports two contract versions (legacy FALSE + current TRUE keepstate):
  *   IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF
- *   ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) TRUE)
+ *   ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) <keepstate>)
  *   RETURN TRUE
  *
  * State layout:
@@ -21,9 +21,11 @@
  * FILL: txnsign publickey:auto (pending on restricted MDS) → auto-complete txnbasics+txnpost on NEWBLOCK
  */
 
-var SCRIPT = 'IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) TRUE) RETURN TRUE';
+var SCRIPT_V1 = 'IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE) RETURN TRUE';
+var SCRIPT_V2 = 'IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) TRUE) RETURN TRUE';
 var USDT_ID = "0x7D39745FBD29049BE29850B55A18BF550E4D442F930F86266E34193D89042A90";
-var SCRIPT_ADDR = "";
+var SCRIPT_ADDR_V1 = "";  // FALSE keepstate (legacy)
+var SCRIPT_ADDR_V2 = "";  // TRUE keepstate (current — new orders go here)
 var DB_READY = false;
 var MY_ADDR = "";
 var MY_HEX_ADDR = "";
@@ -51,14 +53,14 @@ MDS.init(function(msg) {
 });
 
 function initApp() {
-    MDS.cmd('newscript script:"' + SCRIPT + '" trackall:true', function(res) {
-        if (res.status) {
-            SCRIPT_ADDR = res.response.address;
-            MDS.log("Limit v0.2.8 contract: " + SCRIPT_ADDR);
-        } else {
-            MDS.log("SCRIPT ERROR: " + JSON.stringify(res.error));
-        }
-        loadIdentity(function() { finishInit(); });
+    // Register both contract versions
+    MDS.cmd('newscript script:"' + SCRIPT_V1 + '" trackall:true', function(r1) {
+        if (r1.status) SCRIPT_ADDR_V1 = r1.response.address;
+        MDS.cmd('newscript script:"' + SCRIPT_V2 + '" trackall:true', function(r2) {
+            if (r2.status) SCRIPT_ADDR_V2 = r2.response.address;
+            MDS.log("Limit v0.2.9 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
+            loadIdentity(function() { finishInit(); });
+        });
     });
     MDS.cmd("block", function(res) {
         if (res.status) document.getElementById("blockHeight").innerText = "#" + res.response.block;
@@ -146,7 +148,7 @@ function finishInit() {
             "  `timestamp` bigint NOT NULL" +
             ")", function() {
                 DB_READY = true;
-                MDS.log("Limit v0.2.8 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
+                MDS.log("Limit v0.2.9 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
                 cleanupZombieTxns();
                 refreshOrders(); refreshBalances(); loadFills();
             }
@@ -359,12 +361,29 @@ function updateSummary() {
 
 // -- Order Book --
 function refreshOrders() {
-    if (!SCRIPT_ADDR) return;
-    MDS.cmd("coins address:" + SCRIPT_ADDR, function(res) {
-        var orderCoins = (res.status && res.response) ? res.response : [];
-        MDS.log("Order coins: " + orderCoins.length);
-        parseOrderCoins(orderCoins);
-    });
+    if (!SCRIPT_ADDR_V1 && !SCRIPT_ADDR_V2) return;
+    // Scan both contract addresses and merge results
+    var allCoins = [];
+    var done = 0, total = (SCRIPT_ADDR_V1 ? 1 : 0) + (SCRIPT_ADDR_V2 ? 1 : 0);
+    function onDone() {
+        done++;
+        if (done >= total) {
+            MDS.log("Order coins: " + allCoins.length + " (V1+" + "V2)");
+            parseOrderCoins(allCoins);
+        }
+    }
+    if (SCRIPT_ADDR_V1) {
+        MDS.cmd("coins address:" + SCRIPT_ADDR_V1, function(res) {
+            if (res.status && res.response) allCoins = allCoins.concat(res.response);
+            onDone();
+        });
+    }
+    if (SCRIPT_ADDR_V2) {
+        MDS.cmd("coins address:" + SCRIPT_ADDR_V2, function(res) {
+            if (res.status && res.response) allCoins = allCoins.concat(res.response);
+            onDone();
+        });
+    }
 }
 
 function getState(coin, port) {
@@ -487,7 +506,7 @@ function createOrder() {
     var statusEl = document.getElementById("createStatus");
 
     if (!MY_PUBKEY || !MY_HEX_ADDR) { showErr(statusEl, "Identity not loaded"); return; }
-    if (!SCRIPT_ADDR) { showErr(statusEl, "Contract not registered"); return; }
+    if (!SCRIPT_ADDR_V2) { showErr(statusEl, "Contract not registered"); return; }
     if (!amt || !price || parseFloat(price) <= 0 || parseFloat(amt) <= 0) { showErr(statusEl, "Valid price and amount required"); return; }
 
     statusEl.className = "status"; statusEl.innerText = "Creating " + ORDER_SIDE + " order...";
@@ -527,7 +546,7 @@ function createOrder() {
 
     var stateObj = '{"0":"' + MY_PUBKEY + '","1":"' + MY_HEX_ADDR + '","2":"' + wantAmt + '","3":"' + wantTok + '","4":"' + orderId + '","5":"' + sideNum + '","6":"' + price + '"}';
 
-    var cmd = "send amount:" + lockAmt + " address:" + SCRIPT_ADDR + " state:" + stateObj;
+    var cmd = "send amount:" + lockAmt + " address:" + SCRIPT_ADDR_V2 + " state:" + stateObj;
     if (lockTok) cmd += " tokenid:" + lockTok;
 
     MDS.log("CREATE: " + cmd);
@@ -705,7 +724,9 @@ function doFillOrder(order, fillSide) {
                     if (!ok) { showErr(statusEl, "Payment input failed", txid); return; }
 
                     // Output 0: payment to order owner — VERIFYOUT checks this at @INPUT=0
-                    var out0 = "txnoutput id:" + txid + " amount:" + payAmt + " address:" + order.wantAddr + " storestate:false";
+                    // storestate must match the contract's keepstate param (V1=false, V2=true)
+                    var keepstate = (order.address === SCRIPT_ADDR_V2) ? "true" : "false";
+                    var out0 = "txnoutput id:" + txid + " amount:" + payAmt + " address:" + order.wantAddr + " storestate:" + keepstate;
                     if (payTokenId !== "0x00") out0 += " tokenid:" + payTokenId;
                     MDS.cmd(out0, function(r2) {
                         if (!r2.status) { showErr(statusEl, "Payment output failed", txid); return; }
