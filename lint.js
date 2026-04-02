@@ -1,5 +1,5 @@
 /**
- * Limit v0.3.7 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v0.3.8 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
@@ -37,6 +37,10 @@ var GECKO_PRICE = null;
 var PENDING_TXID = null;       // txid awaiting pending approval
 var PENDING_CALLBACK = null;   // callback to run after fill completes
 var CANCEL_STATUS = {};        // coinid → "pending"|"confirming"|"confirmed"
+var PREV_ORDER_COUNT = -1;     // track order book changes
+var PREV_MINIMA_BAL = null;    // track balance changes
+var PREV_USDT_BAL = null;
+var PENDING_FILL_COINID = null; // coinid of order being filled — watch for removal
 
 // -- Init --
 MDS.init(function(msg) {
@@ -55,7 +59,7 @@ function initApp() {
     MDS.cmd('newscript script:"' + SCRIPT + '" trackall:true', function(res) {
         if (res.status) {
             SCRIPT_ADDR = res.response.address;
-            MDS.log("Limit v0.3.7 contract: " + SCRIPT_ADDR);
+            MDS.log("Limit v0.3.8 contract: " + SCRIPT_ADDR);
         } else {
             MDS.log("SCRIPT ERROR: " + JSON.stringify(res.error));
         }
@@ -147,7 +151,7 @@ function finishInit() {
             "  `timestamp` bigint NOT NULL" +
             ")", function() {
                 DB_READY = true;
-                MDS.log("Limit v0.3.7 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
+                MDS.log("Limit v0.3.8 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
                 logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
                 cleanupZombieTxns();
                 refreshOrders(); refreshBalances(); loadFills();
@@ -272,8 +276,17 @@ function refreshBalances() {
             if (b.tokenid === "0x00") minBal = b.sendable;
             if (b.tokenid === USDT_ID) usdtBal = b.sendable;
         });
-        document.getElementById("minimaBalance").innerText = parseFloat(minBal).toFixed(2) + " MINIMA";
-        document.getElementById("usdtBalance").innerText = parseFloat(usdtBal).toFixed(2) + " USDT";
+        var newMin = parseFloat(minBal), newUsdt = parseFloat(usdtBal);
+        if (PREV_MINIMA_BAL !== null) {
+            var minDiff = newMin - PREV_MINIMA_BAL;
+            var usdtDiff = newUsdt - PREV_USDT_BAL;
+            if (Math.abs(minDiff) > 0.001) logActivity("Balance: " + (minDiff > 0 ? "+" : "") + minDiff.toFixed(2) + " MINIMA → " + newMin.toFixed(2), minDiff > 0 ? "ok" : "warn");
+            if (Math.abs(usdtDiff) > 0.001) logActivity("Balance: " + (usdtDiff > 0 ? "+" : "") + usdtDiff.toFixed(4) + " USDT → " + newUsdt.toFixed(4), usdtDiff > 0 ? "ok" : "warn");
+        }
+        PREV_MINIMA_BAL = newMin;
+        PREV_USDT_BAL = newUsdt;
+        document.getElementById("minimaBalance").innerText = newMin.toFixed(2) + " MINIMA";
+        document.getElementById("usdtBalance").innerText = newUsdt.toFixed(2) + " USDT";
     });
 }
 
@@ -371,6 +384,24 @@ function refreshOrders() {
     MDS.cmd("coins address:" + SCRIPT_ADDR, function(res) {
         var orderCoins = (res.status && res.response) ? res.response : [];
         MDS.log("Order coins: " + orderCoins.length);
+        // Check if a pending fill has been confirmed on-chain
+        if (PENDING_FILL_COINID) {
+            var stillExists = false;
+            for (var i = 0; i < orderCoins.length; i++) {
+                if (orderCoins[i].coinid === PENDING_FILL_COINID) { stillExists = true; break; }
+            }
+            if (!stillExists) {
+                logActivity("Order confirmed on-chain — removed from book", "ok");
+                logActivity("Waiting for balance update...", "info");
+                PENDING_FILL_COINID = null;
+            }
+        }
+        // Log order book changes
+        if (PREV_ORDER_COUNT >= 0 && orderCoins.length !== PREV_ORDER_COUNT) {
+            var diff = orderCoins.length - PREV_ORDER_COUNT;
+            logActivity("Order book: " + orderCoins.length + " orders (" + (diff > 0 ? "+" : "") + diff + ")", "info");
+        }
+        PREV_ORDER_COUNT = orderCoins.length;
         parseOrderCoins(orderCoins);
     });
 }
@@ -732,7 +763,8 @@ function fillSellOrder() {
                                     if (ok) {
                                         FILL_IN_PROGRESS = false;
                                         showOk(statusEl, "Fill mined!");
-                                        logActivity("Fill confirmed! Bought " + orderAmt + " MINIMA @ " + fmtPrice(order.price), "ok");
+                                        logActivity("Fill mined! Bought " + orderAmt + " MINIMA @ " + fmtPrice(order.price), "ok");
+                                        PENDING_FILL_COINID = order.coinid;
                                         recordFill(order.orderId, "buy", order.price, orderAmt);
                                         MDS.notify("Bought " + orderAmt + " MINIMA @ " + order.price);
                                         setTimeout(function() { document.getElementById("fillPanel").style.display = "none"; }, 3000);
@@ -757,6 +789,8 @@ function fillSellOrder() {
                                             FILL_IN_PROGRESS = false;
                                             showOk(statusEl, "Fill submitted! Waiting for mining...");
                                             logActivity("Fill submitted — bought " + orderAmt + " MINIMA @ " + fmtPrice(order.price), "ok");
+                                            logActivity("Waiting for on-chain confirmation...", "warn");
+                                            PENDING_FILL_COINID = order.coinid;
                                             recordFill(order.orderId, "buy", order.price, orderAmt);
                                             MDS.notify("Bought " + orderAmt + " MINIMA @ " + order.price);
                                             setTimeout(function() {
@@ -831,7 +865,8 @@ function fillBuyOrder() {
                                     if (ok) {
                                         FILL_IN_PROGRESS = false;
                                         showOk(statusEl, "Fill mined!");
-                                        logActivity("Fill confirmed! Sold " + minimaNeeded + " MINIMA @ " + fmtPrice(order.price), "ok");
+                                        logActivity("Fill mined! Sold " + minimaNeeded + " MINIMA @ " + fmtPrice(order.price), "ok");
+                                        PENDING_FILL_COINID = order.coinid;
                                         recordFill(order.orderId, "sell", order.price, minimaNeeded);
                                         MDS.notify("Sold " + minimaNeeded + " MINIMA @ " + order.price);
                                         setTimeout(function() { document.getElementById("fillPanel").style.display = "none"; }, 3000);
@@ -853,6 +888,8 @@ function fillBuyOrder() {
                                             FILL_IN_PROGRESS = false;
                                             showOk(statusEl, "Fill submitted! Waiting for mining...");
                                             logActivity("Fill submitted — sold " + minimaNeeded + " MINIMA @ " + fmtPrice(order.price), "ok");
+                                            logActivity("Waiting for on-chain confirmation...", "warn");
+                                            PENDING_FILL_COINID = order.coinid;
                                             recordFill(order.orderId, "sell", order.price, minimaNeeded);
                                             MDS.notify("Sold " + minimaNeeded + " MINIMA @ " + order.price);
                                             setTimeout(function() {
