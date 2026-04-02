@@ -1,5 +1,5 @@
 /**
- * Limit v0.4.2 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v0.4.3 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
@@ -69,10 +69,10 @@ function initApp() {
         if (r1.status) SCRIPT_ADDR_V1 = r1.response.address;
         MDS.cmd('newscript script:"' + SCRIPT_V2 + '" trackall:true', function(r2) {
             if (r2.status) SCRIPT_ADDR_V2 = r2.response.address;
-            MDS.log("Limit v0.4.2 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
+            MDS.log("Limit v0.4.3 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
             loadIdentity(function() { finishInit(); });
-    });
         });
+    });
     });
     MDS.cmd("block", function(res) {
         if (res.status) document.getElementById("blockHeight").innerText = "#" + res.response.block;
@@ -167,7 +167,7 @@ function finishInit() {
                 "  `timestamp` bigint NOT NULL" +
                 ")", function() {
                 DB_READY = true;
-                MDS.log("Limit v0.4.2 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
+                MDS.log("Limit v0.4.3 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
                 loadActivityLog(function() {
                     logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
                     cleanupZombieTxns();
@@ -184,7 +184,7 @@ function cleanupZombieTxns() {
     MDS.cmd("txnlist", function(res) {
         if (!res.status || !res.response) return;
         res.response.forEach(function(tx) {
-            if (tx.id && (tx.id.indexOf("fill_") === 0 || tx.id.indexOf("cancel_") === 0)) {
+            if (tx.id && (tx.id.indexOf("fill_") === 0 || tx.id.indexOf("cancel_") === 0 || tx.id.indexOf("collect_") === 0)) {
                 MDS.cmd("txndelete id:" + tx.id);
                 logActivity("Cleaned up stuck txn: " + tx.id, "warn");
             }
@@ -195,14 +195,12 @@ function cleanupZombieTxns() {
 // Auto-collect expired orders (V2 coins older than 1500 blocks)
 function autoCollectExpired() {
     if (!ORDERS || ORDERS.length === 0) return;
-    ORDERS.forEach(function(o) {
-        // Only auto-collect V2 orders (V1 has no expiry clause)
-        if (o.address !== SCRIPT_ADDR_V2) return;
-        // Check coinage via the coin's created block
-        MDS.cmd("block", function(bres) {
-            if (!bres.status) return;
-            var currentBlock = parseInt(bres.response.block);
-            // We need to get the coin's created block from the coin data
+    MDS.cmd("block", function(bres) {
+        if (!bres.status) return;
+        var currentBlock = parseInt(bres.response.block);
+        ORDERS.forEach(function(o) {
+            // Only auto-collect V2 orders (V1 has no expiry clause)
+            if (o.address !== SCRIPT_ADDR_V2) return;
             MDS.cmd("coins coinid:" + o.coinid, function(cres) {
                 if (!cres.status || !cres.response || cres.response.length === 0) return;
                 var coin = cres.response[0];
