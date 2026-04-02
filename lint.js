@@ -73,7 +73,6 @@ function initApp() {
             loadIdentity(function() { finishInit(); });
         });
     });
-    });
     MDS.cmd("block", function(res) {
         if (res.status) document.getElementById("blockHeight").innerText = "#" + res.response.block;
     });
