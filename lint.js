@@ -1,5 +1,5 @@
 /**
- * Limit v0.3.4 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v0.3.5 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
@@ -55,7 +55,7 @@ function initApp() {
     MDS.cmd('newscript script:"' + SCRIPT + '" trackall:true', function(res) {
         if (res.status) {
             SCRIPT_ADDR = res.response.address;
-            MDS.log("Limit v0.3.4 contract: " + SCRIPT_ADDR);
+            MDS.log("Limit v0.3.5 contract: " + SCRIPT_ADDR);
         } else {
             MDS.log("SCRIPT ERROR: " + JSON.stringify(res.error));
         }
@@ -147,11 +147,24 @@ function finishInit() {
             "  `timestamp` bigint NOT NULL" +
             ")", function() {
                 DB_READY = true;
-                MDS.log("Limit v0.3.4 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
+                MDS.log("Limit v0.3.5 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
                 logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
+                cleanupZombieTxns();
                 refreshOrders(); refreshBalances(); loadFills();
             }
         );
+    });
+}
+
+function cleanupZombieTxns() {
+    MDS.cmd("txnlist", function(res) {
+        if (!res.status || !res.response) return;
+        res.response.forEach(function(tx) {
+            if (tx.id && (tx.id.indexOf("fill_") === 0 || tx.id.indexOf("cancel_") === 0)) {
+                MDS.cmd("txndelete id:" + tx.id);
+                logActivity("Cleaned up stuck txn: " + tx.id, "warn");
+            }
+        });
     });
 }
 
