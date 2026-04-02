@@ -504,7 +504,7 @@ body {
 .modal__dim { color: var(--dim); font-size: 13px; }
 
 /* Activity Log */
-.log { max-height: 120px; overflow-y: auto; font-size: 12px; font-family: var(--mono); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin: 8px 0; }
+.log { max-height: 160px; overflow-y: auto; font-size: 12px; font-family: var(--mono); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin: 8px 0; }
 .log:empty { display: none; }
 .log-entry { padding: 4px 8px; border-bottom: 1px solid var(--border-light); display: flex; gap: 6px; align-items: baseline; }
 .log-entry:last-child { border-bottom: none; }

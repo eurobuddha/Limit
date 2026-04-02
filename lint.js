@@ -1,5 +1,5 @@
 /**
- * Limit v0.3.8 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v0.3.9 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
@@ -59,7 +59,7 @@ function initApp() {
     MDS.cmd('newscript script:"' + SCRIPT + '" trackall:true', function(res) {
         if (res.status) {
             SCRIPT_ADDR = res.response.address;
-            MDS.log("Limit v0.3.8 contract: " + SCRIPT_ADDR);
+            MDS.log("Limit v0.3.9 contract: " + SCRIPT_ADDR);
         } else {
             MDS.log("SCRIPT ERROR: " + JSON.stringify(res.error));
         }
@@ -150,12 +150,24 @@ function finishInit() {
             "  `block` int NOT NULL," +
             "  `timestamp` bigint NOT NULL" +
             ")", function() {
-                DB_READY = true;
-                MDS.log("Limit v0.3.8 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
-                logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
-                cleanupZombieTxns();
-                refreshOrders(); refreshBalances(); loadFills();
-            }
+                MDS.sql(
+                    "CREATE TABLE IF NOT EXISTS `activitylog` (" +
+                    "  `id` bigint auto_increment," +
+                    "  `msg` varchar(512) NOT NULL," +
+                    "  `type` varchar(10) NOT NULL," +
+                    "  `timestamp` bigint NOT NULL" +
+                    ")", function() {
+                    // Trim old entries beyond 100
+                    MDS.sql("DELETE FROM activitylog WHERE id NOT IN (SELECT id FROM activitylog ORDER BY timestamp DESC LIMIT 100)", function() {
+                        DB_READY = true;
+                        MDS.log("Limit v0.3.9 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
+                        loadActivityLog(function() {
+                            logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
+                            cleanupZombieTxns();
+                            refreshOrders(); refreshBalances(); loadFills();
+                        });
+                    });
+                });
         );
     });
 }
@@ -176,11 +188,32 @@ function cleanupZombieTxns() {
 function logActivity(msg, type) {
     var el = document.getElementById("activityLog");
     if (!el) return;
-    var t = new Date();
+    var now = Date.now();
+    var t = new Date(now);
     var ts = ('0'+t.getHours()).slice(-2)+':'+('0'+t.getMinutes()).slice(-2)+':'+('0'+t.getSeconds()).slice(-2);
     var cls = type==='ok'?'log--ok':type==='warn'?'log--warn':type==='err'?'log--err':'log--info';
     el.innerHTML = '<div class="log-entry"><span class="log-time">'+ts+'</span><span class="log-msg '+cls+'">'+msg+'</span></div>' + el.innerHTML;
-    while (el.children.length > 20) el.removeChild(el.lastChild);
+    while (el.children.length > 100) el.removeChild(el.lastChild);
+    // Persist to SQL
+    if (DB_READY) MDS.sql("INSERT INTO activitylog (msg, type, timestamp) VALUES ('" + sqlEsc(msg) + "', '" + sqlEsc(type) + "', " + now + ")");
+}
+
+function loadActivityLog(callback) {
+    MDS.sql("SELECT * FROM activitylog ORDER BY timestamp DESC LIMIT 100", function(res) {
+        if (!res.status || !res.rows || res.rows.length === 0) { if (callback) callback(); return; }
+        var el = document.getElementById("activityLog");
+        if (!el) { if (callback) callback(); return; }
+        var html = "";
+        res.rows.forEach(function(row) {
+            var t = new Date(parseInt(row.TIMESTAMP));
+            var day = ('0'+t.getDate()).slice(-2)+'/'+('0'+(t.getMonth()+1)).slice(-2);
+            var ts = day+' '+('0'+t.getHours()).slice(-2)+':'+('0'+t.getMinutes()).slice(-2)+':'+('0'+t.getSeconds()).slice(-2);
+            var cls = row.TYPE==='ok'?'log--ok':row.TYPE==='warn'?'log--warn':row.TYPE==='err'?'log--err':'log--info';
+            html += '<div class="log-entry"><span class="log-time">'+ts+'</span><span class="log-msg '+cls+'">'+row.MSG+'</span></div>';
+        });
+        el.innerHTML = html;
+        if (callback) callback();
+    });
 }
 
 // -- Helpers --
