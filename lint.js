@@ -1,5 +1,5 @@
 /**
- * Limit v0.3.6 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v0.3.7 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
@@ -55,7 +55,7 @@ function initApp() {
     MDS.cmd('newscript script:"' + SCRIPT + '" trackall:true', function(res) {
         if (res.status) {
             SCRIPT_ADDR = res.response.address;
-            MDS.log("Limit v0.3.6 contract: " + SCRIPT_ADDR);
+            MDS.log("Limit v0.3.7 contract: " + SCRIPT_ADDR);
         } else {
             MDS.log("SCRIPT ERROR: " + JSON.stringify(res.error));
         }
@@ -147,7 +147,7 @@ function finishInit() {
             "  `timestamp` bigint NOT NULL" +
             ")", function() {
                 DB_READY = true;
-                MDS.log("Limit v0.3.6 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
+                MDS.log("Limit v0.3.7 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
                 logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
                 cleanupZombieTxns();
                 refreshOrders(); refreshBalances(); loadFills();
@@ -696,18 +696,20 @@ function fillSellOrder() {
     logActivity("Filling SELL — " + orderAmt + " MINIMA @ " + fmtPrice(order.price) + " USDT...", "info");
 
     statusEl.className = "status"; statusEl.innerText = "Building fill transaction...";
+    logActivity("Building transaction...", "info");
     MDS.log("FILL-SELL: minima=" + orderAmt + " usdt=" + usdtCost + " to=" + order.wantAddr);
 
     MDS.cmd("txncreate id:" + txid, function(r0) {
-        if (!r0.status) { showErr(statusEl, "txncreate failed", txid); return; }
+        if (!r0.status) { showErr(statusEl, "txncreate failed", txid); logActivity("txncreate failed", "err"); return; }
 
         // Input 0: order coin (Minima at script)
         MDS.cmd("txninput id:" + txid + " coinid:" + order.coinid, function(r1) {
-            if (!r1.status) { showErr(statusEl, "Order input failed", txid); return; }
+            if (!r1.status) { showErr(statusEl, "Order input failed", txid); logActivity("Order input failed", "err"); return; }
 
             // Find my USDT to pay
             findCoins(USDT_ID, usdtCost, function(result) {
                 if (!result) { showErr(statusEl, "Insufficient USDT (need " + usdtCost + ")", txid); logActivity("Insufficient USDT — need " + usdtCost, "err"); return; }
+                logActivity("Found " + result.total.toFixed(4) + " USDT — paying " + usdtCost, "info");
 
                 addMultipleInputs(txid, result.coins, 0, function(ok) {
                     if (!ok) { showErr(statusEl, "USDT input failed", txid); return; }
@@ -725,6 +727,7 @@ function fillSellOrder() {
                             var usdtChange = (result.total - usdtCost).toFixed(8);
                             var doPost = function() {
                                 statusEl.innerText = "Signing...";
+                                logActivity("Signing transaction...", "info");
                                 var onFillComplete = function(ok) {
                                     if (ok) {
                                         FILL_IN_PROGRESS = false;
@@ -745,6 +748,7 @@ function fillSellOrder() {
                                         return;
                                     }
                                     // Native MDS: sign succeeded, continue with basics+post
+                                    logActivity("Signed — posting to network...", "info");
                                     statusEl.innerText = "Posting...";
                                     MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(resArr) {
                                         var rp = Array.isArray(resArr) ? resArr[resArr.length - 1] : resArr;
@@ -792,18 +796,20 @@ function fillBuyOrder() {
 
     statusEl.className = "status"; statusEl.innerText = "Building fill transaction...";
     logActivity("Filling BUY — " + minimaNeeded + " MINIMA @ " + fmtPrice(order.price) + " USDT...", "info");
+    logActivity("Building transaction...", "info");
     MDS.log("FILL-BUY: minima=" + minimaNeeded + " usdt=" + usdtAmt + " to=" + order.wantAddr);
 
     MDS.cmd("txncreate id:" + txid, function(r0) {
-        if (!r0.status) { showErr(statusEl, "txncreate failed", txid); return; }
+        if (!r0.status) { showErr(statusEl, "txncreate failed", txid); logActivity("txncreate failed", "err"); return; }
 
         // Input 0: order coin (USDT at script)
         MDS.cmd("txninput id:" + txid + " coinid:" + order.coinid, function(r1) {
-            if (!r1.status) { showErr(statusEl, "Order input failed", txid); return; }
+            if (!r1.status) { showErr(statusEl, "Order input failed", txid); logActivity("Order input failed", "err"); return; }
 
             // Find my Minima to pay
             findCoins("0x00", minimaNeeded, function(result) {
                 if (!result) { showErr(statusEl, "Insufficient Minima (need " + minimaNeeded + ")", txid); logActivity("Insufficient MINIMA — need " + minimaNeeded, "err"); return; }
+                logActivity("Found " + result.total.toFixed(4) + " MINIMA — paying " + minimaNeeded, "info");
 
                 addMultipleInputs(txid, result.coins, 0, function(ok) {
                     if (!ok) { showErr(statusEl, "Minima input failed", txid); return; }
@@ -820,6 +826,7 @@ function fillBuyOrder() {
                             var minChange = (result.total - minimaNeeded).toFixed(8);
                             var doPost = function() {
                                 statusEl.innerText = "Signing...";
+                                logActivity("Signing transaction...", "info");
                                 var onFillComplete = function(ok) {
                                     if (ok) {
                                         FILL_IN_PROGRESS = false;
@@ -837,6 +844,7 @@ function fillBuyOrder() {
                                         logActivity("Fill pending — approve in Pending Actions", "warn");
                                         return;
                                     }
+                                    logActivity("Signed — posting to network...", "info");
                                     statusEl.innerText = "Posting...";
                                     MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(resArr) {
                                         var rp = Array.isArray(resArr) ? resArr[resArr.length - 1] : resArr;
