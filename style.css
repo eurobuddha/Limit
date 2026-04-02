@@ -503,6 +503,18 @@ body {
 }
 .modal__dim { color: var(--dim); font-size: 13px; }
 
+/* Activity Log */
+.log { max-height: 120px; overflow-y: auto; font-size: 12px; font-family: var(--mono); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin: 8px 0; }
+.log:empty { display: none; }
+.log-entry { padding: 4px 8px; border-bottom: 1px solid var(--border-light); display: flex; gap: 6px; align-items: baseline; }
+.log-entry:last-child { border-bottom: none; }
+.log-time { color: var(--dim); font-size: 10px; white-space: nowrap; }
+.log-msg { flex: 1; word-break: break-word; }
+.log--ok { color: var(--green); }
+.log--warn { color: var(--accent); }
+.log--err { color: var(--red); }
+.log--info { color: var(--dim); }
+
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }

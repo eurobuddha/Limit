@@ -1,5 +1,5 @@
 /**
- * Limit v0.3.3 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v0.3.4 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
@@ -55,7 +55,7 @@ function initApp() {
     MDS.cmd('newscript script:"' + SCRIPT + '" trackall:true', function(res) {
         if (res.status) {
             SCRIPT_ADDR = res.response.address;
-            MDS.log("Limit v0.3.3 contract: " + SCRIPT_ADDR);
+            MDS.log("Limit v0.3.4 contract: " + SCRIPT_ADDR);
         } else {
             MDS.log("SCRIPT ERROR: " + JSON.stringify(res.error));
         }
@@ -147,11 +147,23 @@ function finishInit() {
             "  `timestamp` bigint NOT NULL" +
             ")", function() {
                 DB_READY = true;
-                MDS.log("Limit v0.3.3 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
+                MDS.log("Limit v0.3.4 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
+                logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
                 refreshOrders(); refreshBalances(); loadFills();
             }
         );
     });
+}
+
+// -- Activity Log --
+function logActivity(msg, type) {
+    var el = document.getElementById("activityLog");
+    if (!el) return;
+    var t = new Date();
+    var ts = ('0'+t.getHours()).slice(-2)+':'+('0'+t.getMinutes()).slice(-2)+':'+('0'+t.getSeconds()).slice(-2);
+    var cls = type==='ok'?'log--ok':type==='warn'?'log--warn':type==='err'?'log--err':'log--info';
+    el.innerHTML = '<div class="log-entry"><span class="log-time">'+ts+'</span><span class="log-msg '+cls+'">'+msg+'</span></div>' + el.innerHTML;
+    while (el.children.length > 20) el.removeChild(el.lastChild);
 }
 
 // -- Helpers --
@@ -362,6 +374,7 @@ function exitDex() {
         }
     });
     MDS.log("Limit: exit — untracked " + count + " foreign coins, tracking disabled");
+    logActivity("Tracking disabled — untracked " + count + " coin" + (count !== 1 ? "s" : ""), "info");
     var msgEl = document.getElementById("exitMsg");
     if (msgEl) msgEl.innerText = count > 0
         ? "Untracked " + count + " order book coin" + (count > 1 ? "s" : "") + " from your node. They will no longer appear as locked in your wallet."
@@ -479,6 +492,7 @@ function createOrder() {
     if (!amt || !price || parseFloat(price) <= 0 || parseFloat(amt) <= 0) { showErr(statusEl, "Valid price and amount required"); return; }
 
     statusEl.className = "status"; statusEl.innerText = "Creating " + ORDER_SIDE + " order...";
+    logActivity("Creating " + ORDER_SIDE.toUpperCase() + " order — " + amt + " MINIMA @ " + price + " USDT...", "info");
 
     var orderId = "0x" + Date.now().toString(16).toUpperCase();
     var sideNum = ORDER_SIDE === "buy" ? "0" : "1";
@@ -509,7 +523,9 @@ function createOrder() {
         });
         if (parseFloat(sendable) < parseFloat(lockAmt)) {
             var unit = lockTok ? "USDT" : "MINIMA";
-            showErr(statusEl, "Insufficient sendable " + unit + " — need " + lockAmt + ", have " + parseFloat(sendable).toFixed(4));
+            var errMsg = "Insufficient " + unit + " — need " + lockAmt + ", have " + parseFloat(sendable).toFixed(4);
+            showErr(statusEl, errMsg);
+            logActivity(errMsg, "err");
             return;
         }
 
@@ -520,14 +536,16 @@ function createOrder() {
 
     MDS.log("CREATE: " + cmd);
     MDS.cmd(cmd, function(res) {
-        if (isPending(res)) { showPending(statusEl, "Order queued — approve in Pending Actions"); return; }
+        if (isPending(res)) { showPending(statusEl, "Order queued — approve in Pending Actions"); logActivity("Order pending — approve in Pending Actions", "warn"); return; }
         if (res.status) {
             showOk(statusEl, "Order placed! Waiting for confirmation...");
+            logActivity(ORDER_SIDE.toUpperCase() + " order placed — " + amt + " MINIMA @ " + price + " USDT", "ok");
             document.getElementById("orderAmount").value = "";
             document.getElementById("orderPrice").value = "";
             document.getElementById("totalSummary").innerText = "0.00";
         } else {
             showErr(statusEl, res.error || "Failed to create order");
+            logActivity("Order failed — " + (res.error || "unknown error"), "err");
         }
     });
     }); // end balance check
@@ -539,6 +557,7 @@ function cancelOrder(coinid) {
     var order = ORDERS.find(function(o) { return o.coinid === coinid; });
     if (!order) return;
     MDS.notify("Cancelling order...");
+    logActivity("Cancelling order...", "info");
 
     var txid = "cancel_" + Date.now();
     var cancelAmt = order.amount;
@@ -563,12 +582,14 @@ function cancelOrder(coinid) {
                         var csEl = document.getElementById("cancelStatus");
                         csEl.className = "status status--warn";
                         csEl.innerText = "Cancel pending — approve in your node's Pending Actions";
+                        logActivity("Cancel pending — approve in Pending Actions", "warn");
                         showPending(null, null, txid, function(ok) {
                             if (ok) {
                                 CANCEL_STATUS[coinid] = "confirmed";
                                 renderMyOrders();
                                 csEl.className = "status status--ok";
                                 csEl.innerText = "Order cancelled!";
+                                logActivity("Order cancelled", "ok");
                                 refreshOrders(); refreshBalances();
                             }
                         });
@@ -587,12 +608,15 @@ function cancelOrder(coinid) {
                             renderMyOrders();
                             csEl.className = "status status--ok";
                             csEl.innerText = "Order cancelled!";
+                            logActivity("Order cancelled", "ok");
                             refreshOrders(); refreshBalances();
                         } else {
                             delete CANCEL_STATUS[coinid];
                             renderMyOrders();
+                            var cancelErr = "Cancel failed — " + (rp ? rp.error || "unknown" : "no response");
                             csEl.className = "status status--err";
-                            csEl.innerText = "Cancel failed: " + (rp ? rp.error || "unknown" : "no response");
+                            csEl.innerText = cancelErr;
+                            logActivity(cancelErr, "err");
                         }
                     });
                 });
@@ -656,6 +680,7 @@ function fillSellOrder() {
     var orderAmt = parseFloat(order.amount);  // Minima in order
     var usdtCost = order.wantAmt;             // USDT the seller wants
     var txid = "fill_" + Date.now();
+    logActivity("Filling SELL — " + orderAmt + " MINIMA @ " + fmtPrice(order.price) + " USDT...", "info");
 
     statusEl.className = "status"; statusEl.innerText = "Building fill transaction...";
     MDS.log("FILL-SELL: minima=" + orderAmt + " usdt=" + usdtCost + " to=" + order.wantAddr);
@@ -669,7 +694,7 @@ function fillSellOrder() {
 
             // Find my USDT to pay
             findCoins(USDT_ID, usdtCost, function(result) {
-                if (!result) { showErr(statusEl, "Insufficient USDT (need " + usdtCost + ")", txid); return; }
+                if (!result) { showErr(statusEl, "Insufficient USDT (need " + usdtCost + ")", txid); logActivity("Insufficient USDT — need " + usdtCost, "err"); return; }
 
                 addMultipleInputs(txid, result.coins, 0, function(ok) {
                     if (!ok) { showErr(statusEl, "USDT input failed", txid); return; }
@@ -691,6 +716,7 @@ function fillSellOrder() {
                                     if (ok) {
                                         FILL_IN_PROGRESS = false;
                                         showOk(statusEl, "Fill mined!");
+                                        logActivity("Fill confirmed! Bought " + orderAmt + " MINIMA @ " + fmtPrice(order.price), "ok");
                                         recordFill(order.orderId, "buy", order.price, orderAmt);
                                         MDS.notify("Bought " + orderAmt + " MINIMA @ " + order.price);
                                         setTimeout(function() { document.getElementById("fillPanel").style.display = "none"; }, 3000);
@@ -702,6 +728,7 @@ function fillSellOrder() {
                                     if (isPending(signRes)) {
                                         // Restricted MDS: pending will be auto-completed on NEWBLOCK
                                         showPending(statusEl, "Approve fill in Pending Actions — will auto-complete", txid, onFillComplete);
+                                        logActivity("Fill pending — approve in Pending Actions", "warn");
                                         return;
                                     }
                                     // Native MDS: sign succeeded, continue with basics+post
@@ -712,6 +739,7 @@ function fillSellOrder() {
                                         if (rp && rp.status) {
                                             FILL_IN_PROGRESS = false;
                                             showOk(statusEl, "Fill submitted! Waiting for mining...");
+                                            logActivity("Fill submitted — bought " + orderAmt + " MINIMA @ " + fmtPrice(order.price), "ok");
                                             recordFill(order.orderId, "buy", order.price, orderAmt);
                                             MDS.notify("Bought " + orderAmt + " MINIMA @ " + order.price);
                                             setTimeout(function() {
@@ -720,6 +748,7 @@ function fillSellOrder() {
                                             }, 3000);
                                         } else {
                                             showErr(statusEl, "Post failed: " + (rp ? rp.error || "unknown" : "no response"), txid);
+                                            logActivity("Fill failed — " + (rp ? rp.error || "unknown" : "no response"), "err");
                                         }
                                     });
                                 });
@@ -749,6 +778,7 @@ function fillBuyOrder() {
     var txid = "fill_" + Date.now();
 
     statusEl.className = "status"; statusEl.innerText = "Building fill transaction...";
+    logActivity("Filling BUY — " + minimaNeeded + " MINIMA @ " + fmtPrice(order.price) + " USDT...", "info");
     MDS.log("FILL-BUY: minima=" + minimaNeeded + " usdt=" + usdtAmt + " to=" + order.wantAddr);
 
     MDS.cmd("txncreate id:" + txid, function(r0) {
@@ -760,7 +790,7 @@ function fillBuyOrder() {
 
             // Find my Minima to pay
             findCoins("0x00", minimaNeeded, function(result) {
-                if (!result) { showErr(statusEl, "Insufficient Minima (need " + minimaNeeded + ")", txid); return; }
+                if (!result) { showErr(statusEl, "Insufficient Minima (need " + minimaNeeded + ")", txid); logActivity("Insufficient MINIMA — need " + minimaNeeded, "err"); return; }
 
                 addMultipleInputs(txid, result.coins, 0, function(ok) {
                     if (!ok) { showErr(statusEl, "Minima input failed", txid); return; }
@@ -781,6 +811,7 @@ function fillBuyOrder() {
                                     if (ok) {
                                         FILL_IN_PROGRESS = false;
                                         showOk(statusEl, "Fill mined!");
+                                        logActivity("Fill confirmed! Sold " + minimaNeeded + " MINIMA @ " + fmtPrice(order.price), "ok");
                                         recordFill(order.orderId, "sell", order.price, minimaNeeded);
                                         MDS.notify("Sold " + minimaNeeded + " MINIMA @ " + order.price);
                                         setTimeout(function() { document.getElementById("fillPanel").style.display = "none"; }, 3000);
@@ -790,6 +821,7 @@ function fillBuyOrder() {
                                     MDS.log("FILL-BUY sign: status=" + (signRes ? signRes.status : "null") + " err=" + (signRes ? signRes.error || "none" : "no response"));
                                     if (isPending(signRes)) {
                                         showPending(statusEl, "Approve fill in Pending Actions — will auto-complete", txid, onFillComplete);
+                                        logActivity("Fill pending — approve in Pending Actions", "warn");
                                         return;
                                     }
                                     statusEl.innerText = "Posting...";
@@ -799,6 +831,7 @@ function fillBuyOrder() {
                                         if (rp && rp.status) {
                                             FILL_IN_PROGRESS = false;
                                             showOk(statusEl, "Fill submitted! Waiting for mining...");
+                                            logActivity("Fill submitted — sold " + minimaNeeded + " MINIMA @ " + fmtPrice(order.price), "ok");
                                             recordFill(order.orderId, "sell", order.price, minimaNeeded);
                                             MDS.notify("Sold " + minimaNeeded + " MINIMA @ " + order.price);
                                             setTimeout(function() {
@@ -807,6 +840,7 @@ function fillBuyOrder() {
                                             }, 3000);
                                         } else {
                                             showErr(statusEl, "Post failed: " + (rp ? rp.error || "unknown" : "no response"), txid);
+                                            logActivity("Fill failed — " + (rp ? rp.error || "unknown" : "no response"), "err");
                                         }
                                     });
                                 });
