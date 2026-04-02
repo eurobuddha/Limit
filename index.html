@@ -39,6 +39,7 @@
         <button class="tab tab--active" data-view="orders">Order Book</button>
         <button class="tab" data-view="create">New Order</button>
         <button class="tab" data-view="chart">Price Chart</button>
+        <button class="tab" data-view="history">History</button>
     </nav>
 
     <!-- VIEW: Order Book -->
@@ -152,9 +153,47 @@
         </div>
     </section>
 
+    <!-- VIEW: Trading History -->
+    <section id="view-history" class="view">
+        <h2 class="view__title">My Trading History</h2>
+        <div class="hist-stats">
+            <div class="hist-stat">
+                <span class="hist-stat__label">Trades</span>
+                <span class="hist-stat__val" id="statTrades">0</span>
+            </div>
+            <div class="hist-stat">
+                <span class="hist-stat__label">Volume (USDT)</span>
+                <span class="hist-stat__val" id="statVolume">0.00</span>
+            </div>
+            <div class="hist-stat">
+                <span class="hist-stat__label">Avg Price</span>
+                <span class="hist-stat__val" id="statAvgPrice">—</span>
+            </div>
+            <div class="hist-stat">
+                <span class="hist-stat__label">P&L vs Market</span>
+                <span class="hist-stat__val" id="statPnL">—</span>
+            </div>
+        </div>
+        <div class="mytrades">
+            <div class="mytrades__head">
+                <span>Date</span>
+                <span>Side</span>
+                <span>Amount</span>
+                <span>Price</span>
+                <span>Total</span>
+                <span>Market</span>
+                <span>Block</span>
+            </div>
+            <div id="myTradesList" class="mytrades__body">
+                <div class="book__empty">No personal trades yet</div>
+            </div>
+        </div>
+        <p class="view__desc" style="margin-top:12px;">Tracks your fills and detects when your orders are filled by others.</p>
+    </section>
+
     <!-- Footer -->
     <footer class="footer">
-        <span>Limit v0.4.3</span>
+        <span>Limit v0.4.4</span>
         <span class="footer__sep">|</span>
         <span>VERIFYOUT Smart Contract</span>
         <span class="footer__sep">|</span>

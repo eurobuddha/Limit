@@ -1,5 +1,5 @@
 /**
- * Limit v0.4.3 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v0.4.4 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
@@ -50,6 +50,8 @@ var PREV_MINIMA_BAL = null;    // track balance changes
 var PREV_USDT_BAL = null;
 var PENDING_FILL_COINID = null; // coinid of order being filled — watch for removal
 var PENDING_CREATE = false;    // true after order send — watch for new mine order to appear
+var MY_TRADES = [];            // personal trading history from SQL
+var PREV_MY_ORDERS = {};       // track mine orders for maker fill detection
 
 // -- Init --
 MDS.init(function(msg) {
@@ -69,7 +71,7 @@ function initApp() {
         if (r1.status) SCRIPT_ADDR_V1 = r1.response.address;
         MDS.cmd('newscript script:"' + SCRIPT_V2 + '" trackall:true', function(r2) {
             if (r2.status) SCRIPT_ADDR_V2 = r2.response.address;
-            MDS.log("Limit v0.4.3 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
+            MDS.log("Limit v0.4.4 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
             loadIdentity(function() { finishInit(); });
         });
     });
@@ -165,14 +167,30 @@ function finishInit() {
                 "  `type` varchar(10) NOT NULL," +
                 "  `timestamp` bigint NOT NULL" +
                 ")", function() {
-                DB_READY = true;
-                MDS.log("Limit v0.4.3 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
-                loadActivityLog(function() {
-                    logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
-                    cleanupZombieTxns();
-                    refreshOrders(); refreshBalances(); loadFills();
-                    // Auto-collect expired orders after a short delay (orders need to load first)
-                    setTimeout(autoCollectExpired, 5000);
+                MDS.sql(
+                    "CREATE TABLE IF NOT EXISTS `mytrades` (" +
+                    "  `id` bigint auto_increment," +
+                    "  `orderid` varchar(160) NOT NULL," +
+                    "  `role` varchar(10) NOT NULL," +
+                    "  `side` varchar(10) NOT NULL," +
+                    "  `price` varchar(80) NOT NULL," +
+                    "  `amount` varchar(80) NOT NULL," +
+                    "  `total` varchar(80) NOT NULL," +
+                    "  `gecko_price` varchar(80) NOT NULL," +
+                    "  `block` int NOT NULL," +
+                    "  `timestamp` bigint NOT NULL" +
+                    ")", function() {
+                    DB_READY = true;
+                    MDS.log("Limit v0.4.4 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
+                    // Backfill mytrades from fills on first run
+                    backfillMyTrades(function() {
+                        loadActivityLog(function() {
+                            logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
+                            cleanupZombieTxns();
+                            refreshOrders(); refreshBalances(); loadFills(); loadMyTrades();
+                            setTimeout(autoCollectExpired, 5000);
+                        });
+                    });
                 });
             });
         });
@@ -233,6 +251,106 @@ function autoCollectExpired() {
                 });
             });
         });
+    });
+}
+
+// -- My Trades --
+function recordMyTrade(orderId, role, side, price, amount) {
+    var total = (parseFloat(amount) * parseFloat(price)).toFixed(4);
+    var gp = GECKO_PRICE ? GECKO_PRICE.toFixed(6) : "0";
+    var now = Date.now();
+    MDS.cmd("block", function(res) {
+        var bn = res.status ? parseInt(res.response.block) || 0 : 0;
+        MDS.sql(
+            "INSERT INTO mytrades (orderid, role, side, price, amount, total, gecko_price, block, timestamp) VALUES ('" +
+            sqlEsc(orderId) + "', '" + sqlEsc(role) + "', '" + sqlEsc(side) + "', '" + sqlEsc(price) + "', '" +
+            sqlEsc(amount) + "', '" + sqlEsc(total) + "', '" + sqlEsc(gp) + "', " + bn + ", " + now + ")",
+            function() { loadMyTrades(); }
+        );
+    });
+}
+
+function loadMyTrades(callback) {
+    MDS.sql("SELECT * FROM mytrades ORDER BY timestamp DESC LIMIT 200", function(res) {
+        if (!res.status) { if (callback) callback(); return; }
+        MY_TRADES = res.rows || [];
+        renderMyTrades();
+        if (callback) callback();
+    });
+}
+
+function renderMyTrades() {
+    var el = document.getElementById("myTradesList");
+    if (!el) return;
+    if (MY_TRADES.length === 0) {
+        el.innerHTML = '<div class="book__empty">No personal trades yet</div>';
+        renderTradeStats();
+        return;
+    }
+    var html = "";
+    MY_TRADES.forEach(function(t) {
+        var d = new Date(parseInt(t.TIMESTAMP));
+        var date = ('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2)+' '+
+                   ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
+        var sideClass = t.SIDE === "buy" ? "side-tag--buy" : "side-tag--sell";
+        var gp = parseFloat(t.GECKO_PRICE);
+        var gpStr = gp > 0 ? fmtPrice(gp) : "—";
+        html += '<div class="mytrades__row">' +
+            '<span>' + date + '</span>' +
+            '<span class="side-tag ' + sideClass + '">' + t.SIDE.toUpperCase() + '</span>' +
+            '<span>' + parseFloat(t.AMOUNT).toFixed(4) + '</span>' +
+            '<span class="price--' + t.SIDE + '">' + fmtPrice(parseFloat(t.PRICE)) + '</span>' +
+            '<span>' + parseFloat(t.TOTAL).toFixed(4) + '</span>' +
+            '<span>' + gpStr + '</span>' +
+            '<span>' + t.BLOCK + '</span></div>';
+    });
+    el.innerHTML = html;
+    renderTradeStats();
+}
+
+function renderTradeStats() {
+    var count = MY_TRADES.length;
+    var el = document.getElementById("statTrades");
+    if (!el) return;
+    el.innerText = count;
+    if (count === 0) {
+        document.getElementById("statVolume").innerText = "0.00";
+        document.getElementById("statAvgPrice").innerText = "—";
+        document.getElementById("statPnL").innerText = "—";
+        return;
+    }
+    var totalVol = 0, weightedPrice = 0, totalAmt = 0, pnl = 0;
+    MY_TRADES.forEach(function(t) {
+        var total = parseFloat(t.TOTAL);
+        var price = parseFloat(t.PRICE);
+        var amount = parseFloat(t.AMOUNT);
+        var gecko = parseFloat(t.GECKO_PRICE);
+        totalVol += total;
+        weightedPrice += price * amount;
+        totalAmt += amount;
+        if (gecko > 0) {
+            pnl += t.SIDE === "buy" ? (gecko - price) * amount : (price - gecko) * amount;
+        }
+    });
+    var avgPrice = totalAmt > 0 ? weightedPrice / totalAmt : 0;
+    document.getElementById("statVolume").innerText = totalVol.toFixed(2);
+    document.getElementById("statAvgPrice").innerText = fmtPrice(avgPrice);
+    var pnlEl = document.getElementById("statPnL");
+    pnlEl.innerText = (pnl >= 0 ? "+" : "") + pnl.toFixed(4) + " USDT";
+    pnlEl.style.color = pnl >= 0 ? "var(--green)" : "var(--red)";
+}
+
+function backfillMyTrades(callback) {
+    MDS.sql("SELECT COUNT(*) AS C FROM mytrades", function(res) {
+        if (res.status && res.rows && res.rows[0].C === "0") {
+            MDS.sql("SELECT COUNT(*) AS C FROM fills", function(fres) {
+                if (fres.status && fres.rows && parseInt(fres.rows[0].C) > 0) {
+                    MDS.sql("INSERT INTO mytrades (orderid, role, side, price, amount, total, gecko_price, block, timestamp) " +
+                        "SELECT orderid, 'taker', side, price, amount, total, '0', block, timestamp FROM fills",
+                        function() { if (callback) callback(); });
+                } else { if (callback) callback(); }
+            });
+        } else { if (callback) callback(); }
     });
 }
 
@@ -422,6 +540,7 @@ function setupUI() {
             tab.classList.add("tab--active");
             document.getElementById("view-" + tab.dataset.view).classList.add("view--active");
             if (tab.dataset.view === "chart") renderCharts();
+            if (tab.dataset.view === "history") loadMyTrades();
         });
     });
     document.querySelectorAll(".side-btn").forEach(function(btn) {
@@ -577,6 +696,21 @@ function parseOrderCoins(coins) {
             isMine: isMyKey(ownerkey)
         });
     });
+    // Detect maker fills: my orders that disappeared (not cancelled, not collected)
+    var currentMine = {};
+    ORDERS.forEach(function(o) { if (o.isMine) currentMine[o.coinid] = o; });
+    for (var cid in PREV_MY_ORDERS) {
+        if (!currentMine[cid] && !CANCEL_STATUS[cid]) {
+            var gone = PREV_MY_ORDERS[cid];
+            var makerSide = gone.side;
+            var amt = gone.side === "buy"
+                ? (parseFloat(gone.amount) / gone.price).toFixed(4)
+                : parseFloat(gone.amount).toFixed(4);
+            recordMyTrade(gone.orderId, "maker", makerSide, gone.price, amt);
+            logActivity("Your " + makerSide.toUpperCase() + " order filled — " + amt + " MINIMA @ " + fmtPrice(gone.price), "ok");
+        }
+    }
+    PREV_MY_ORDERS = currentMine;
     renderOrderBook();
     renderMyOrders();
 }
@@ -883,6 +1017,7 @@ function fillSellOrder() {
                                         logActivity("Fill mined! Bought " + orderAmt + " MINIMA @ " + fmtPrice(order.price), "ok");
                                         PENDING_FILL_COINID = order.coinid;
                                         recordFill(order.orderId, "buy", order.price, orderAmt);
+                                        recordMyTrade(order.orderId, "taker", "buy", order.price, orderAmt);
                                         MDS.notify("Bought " + orderAmt + " MINIMA @ " + order.price);
                                         setTimeout(function() { document.getElementById("fillPanel").style.display = "none"; }, 3000);
                                     }
@@ -909,6 +1044,7 @@ function fillSellOrder() {
                                             logActivity("Waiting for on-chain confirmation...", "warn");
                                             PENDING_FILL_COINID = order.coinid;
                                             recordFill(order.orderId, "buy", order.price, orderAmt);
+                                            recordMyTrade(order.orderId, "taker", "buy", order.price, orderAmt);
                                             MDS.notify("Bought " + orderAmt + " MINIMA @ " + order.price);
                                             setTimeout(function() {
                                                 document.getElementById("fillPanel").style.display = "none";
@@ -985,6 +1121,7 @@ function fillBuyOrder() {
                                         logActivity("Fill mined! Sold " + minimaNeeded + " MINIMA @ " + fmtPrice(order.price), "ok");
                                         PENDING_FILL_COINID = order.coinid;
                                         recordFill(order.orderId, "sell", order.price, minimaNeeded);
+                                        recordMyTrade(order.orderId, "taker", "sell", order.price, minimaNeeded);
                                         MDS.notify("Sold " + minimaNeeded + " MINIMA @ " + order.price);
                                         setTimeout(function() { document.getElementById("fillPanel").style.display = "none"; }, 3000);
                                     }
@@ -1008,6 +1145,7 @@ function fillBuyOrder() {
                                             logActivity("Waiting for on-chain confirmation...", "warn");
                                             PENDING_FILL_COINID = order.coinid;
                                             recordFill(order.orderId, "sell", order.price, minimaNeeded);
+                                            recordMyTrade(order.orderId, "taker", "sell", order.price, minimaNeeded);
                                             MDS.notify("Sold " + minimaNeeded + " MINIMA @ " + order.price);
                                             setTimeout(function() {
                                                 document.getElementById("fillPanel").style.display = "none";
