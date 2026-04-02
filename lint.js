@@ -1,12 +1,18 @@
 /**
- * Limit v0.4.0 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v0.4.1 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
- * KISS VM Smart Contract (from docs.minima.global):
- *   IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF
- *   ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE)
- *   RETURN TRUE
+ * KISS VM Smart Contracts:
+ *   V1 (legacy, no expiry):
+ *     IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF
+ *     ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE)
+ *     RETURN TRUE
+ *   V2 (current, 1500 block expiry):
+ *     IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF
+ *     IF @COINAGE GT 1500 THEN ASSERT VERIFYOUT(@INPUT PREVSTATE(1) @AMOUNT @TOKENID FALSE) RETURN TRUE ENDIF
+ *     ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE)
+ *     RETURN TRUE
  *
  * State layout:
  *   Port 0 = owner public key (for SIGNEDBY cancel)
@@ -21,9 +27,11 @@
  * FILL: txnsign publickey:auto (pending on restricted MDS) → auto-complete txnbasics+txnpost on NEWBLOCK
  */
 
-var SCRIPT = 'IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE) RETURN TRUE';
+var SCRIPT_V1 = 'IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE) RETURN TRUE';
+var SCRIPT_V2 = 'IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF IF @COINAGE GT 1500 THEN ASSERT VERIFYOUT(@INPUT PREVSTATE(1) @AMOUNT @TOKENID FALSE) RETURN TRUE ENDIF ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE) RETURN TRUE';
 var USDT_ID = "0x7D39745FBD29049BE29850B55A18BF550E4D442F930F86266E34193D89042A90";
-var SCRIPT_ADDR = "";
+var SCRIPT_ADDR_V1 = "";  // legacy (no expiry)
+var SCRIPT_ADDR_V2 = "";  // current (1500 block expiry)
 var DB_READY = false;
 var MY_ADDR = "";
 var MY_HEX_ADDR = "";
@@ -57,14 +65,14 @@ MDS.init(function(msg) {
 });
 
 function initApp() {
-    MDS.cmd('newscript script:"' + SCRIPT + '" trackall:true', function(res) {
-        if (res.status) {
-            SCRIPT_ADDR = res.response.address;
-            MDS.log("Limit v0.4.0 contract: " + SCRIPT_ADDR);
-        } else {
-            MDS.log("SCRIPT ERROR: " + JSON.stringify(res.error));
-        }
-        loadIdentity(function() { finishInit(); });
+    MDS.cmd('newscript script:"' + SCRIPT_V1 + '" trackall:true', function(r1) {
+        if (r1.status) SCRIPT_ADDR_V1 = r1.response.address;
+        MDS.cmd('newscript script:"' + SCRIPT_V2 + '" trackall:true', function(r2) {
+            if (r2.status) SCRIPT_ADDR_V2 = r2.response.address;
+            MDS.log("Limit v0.4.1 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
+            loadIdentity(function() { finishInit(); });
+    });
+        });
     });
     MDS.cmd("block", function(res) {
         if (res.status) document.getElementById("blockHeight").innerText = "#" + res.response.block;
@@ -159,11 +167,13 @@ function finishInit() {
                 "  `timestamp` bigint NOT NULL" +
                 ")", function() {
                 DB_READY = true;
-                MDS.log("Limit v0.4.0 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
+                MDS.log("Limit v0.4.1 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
                 loadActivityLog(function() {
                     logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
                     cleanupZombieTxns();
                     refreshOrders(); refreshBalances(); loadFills();
+                    // Auto-collect expired orders after a short delay (orders need to load first)
+                    setTimeout(autoCollectExpired, 5000);
                 });
             });
         });
@@ -178,6 +188,54 @@ function cleanupZombieTxns() {
                 MDS.cmd("txndelete id:" + tx.id);
                 logActivity("Cleaned up stuck txn: " + tx.id, "warn");
             }
+        });
+    });
+}
+
+// Auto-collect expired orders (V2 coins older than 1500 blocks)
+function autoCollectExpired() {
+    if (!ORDERS || ORDERS.length === 0) return;
+    ORDERS.forEach(function(o) {
+        if (!o.isMine) return;
+        // Only auto-collect V2 orders (V1 has no expiry clause)
+        if (o.address !== SCRIPT_ADDR_V2) return;
+        // Check coinage via the coin's created block
+        MDS.cmd("block", function(bres) {
+            if (!bres.status) return;
+            var currentBlock = parseInt(bres.response.block);
+            // We need to get the coin's created block from the coin data
+            MDS.cmd("coins coinid:" + o.coinid, function(cres) {
+                if (!cres.status || !cres.response || cres.response.length === 0) return;
+                var coin = cres.response[0];
+                var created = parseInt(coin.created) || 0;
+                var age = currentBlock - created;
+                if (age <= 1500) return;
+                logActivity("Collecting expired order — " + parseFloat(o.amount).toFixed(4) + " (age: " + age + " blocks)", "warn");
+                var txid = "collect_" + Date.now();
+                MDS.cmd("txncreate id:" + txid, function(r0) {
+                    if (!r0.status) { logActivity("Collect failed — txncreate", "err"); return; }
+                    MDS.cmd("txninput id:" + txid + " coinid:" + o.coinid, function(r1) {
+                        if (!r1.status) { logActivity("Collect failed — txninput", "err"); MDS.cmd("txndelete id:" + txid); return; }
+                        var outCmd = "txnoutput id:" + txid + " amount:" + o.amount + " address:" + o.wantAddr + " storestate:false";
+                        if (o.tokenid !== "0x00") outCmd += " tokenid:" + o.tokenid;
+                        MDS.cmd(outCmd, function(r2) {
+                            if (!r2.status) { logActivity("Collect failed — txnoutput", "err"); MDS.cmd("txndelete id:" + txid); return; }
+                            MDS.cmd("txnsign id:" + txid + " publickey:auto", function(sr) {
+                                if (isPending(sr)) { logActivity("Collect pending — approve in Pending Actions", "warn"); return; }
+                                MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(pr) {
+                                    var rp = Array.isArray(pr) ? pr[pr.length - 1] : pr;
+                                    if (rp && rp.status) {
+                                        logActivity("Expired order collected — funds returning to wallet", "ok");
+                                    } else {
+                                        logActivity("Collect failed — " + (rp ? rp.error || "unknown" : "no response"), "err");
+                                        MDS.cmd("txndelete id:" + txid);
+                                    }
+                                });
+                            });
+                        });
+                    });
+                });
+            });
         });
     });
 }
@@ -411,9 +469,13 @@ function updateSummary() {
 
 // -- Order Book --
 function refreshOrders() {
-    if (!SCRIPT_ADDR) return;
-    MDS.cmd("coins address:" + SCRIPT_ADDR, function(res) {
-        var orderCoins = (res.status && res.response) ? res.response : [];
+    if (!SCRIPT_ADDR_V1 && !SCRIPT_ADDR_V2) return;
+    var allCoins = [];
+    var done = 0, total = (SCRIPT_ADDR_V1 ? 1 : 0) + (SCRIPT_ADDR_V2 ? 1 : 0);
+    function onAllCoins() {
+        done++;
+        if (done < total) return;
+        var orderCoins = allCoins;
         MDS.log("Order coins: " + orderCoins.length);
         // Check if a pending fill has been confirmed on-chain
         if (PENDING_FILL_COINID) {
@@ -442,12 +504,25 @@ function refreshOrders() {
         }
         PREV_ORDER_COUNT = orderCoins.length;
         parseOrderCoins(orderCoins);
-    });
+    }
+    if (SCRIPT_ADDR_V1) {
+        MDS.cmd("coins address:" + SCRIPT_ADDR_V1, function(res) {
+            if (res.status && res.response) allCoins = allCoins.concat(res.response);
+            onAllCoins();
+        });
+    }
+    if (SCRIPT_ADDR_V2) {
+        MDS.cmd("coins address:" + SCRIPT_ADDR_V2, function(res) {
+            if (res.status && res.response) allCoins = allCoins.concat(res.response);
+            onAllCoins();
+        });
+    }
 }
 
 function exitDex() {
     // Stop future tracking
-    MDS.cmd('newscript script:"' + SCRIPT + '" track:false');
+    MDS.cmd('newscript script:"' + SCRIPT_V1 + '" track:false');
+    MDS.cmd('newscript script:"' + SCRIPT_V2 + '" track:false');
     // Untrack all foreign order coins immediately
     var count = 0;
     ORDERS.forEach(function(o) {
@@ -571,7 +646,7 @@ function createOrder() {
     var statusEl = document.getElementById("createStatus");
 
     if (!MY_PUBKEY || !MY_HEX_ADDR) { showErr(statusEl, "Identity not loaded"); return; }
-    if (!SCRIPT_ADDR) { showErr(statusEl, "Contract not registered"); return; }
+    if (!SCRIPT_ADDR_V2) { showErr(statusEl, "Contract not registered"); return; }
     if (!amt || !price || parseFloat(price) <= 0 || parseFloat(amt) <= 0) { showErr(statusEl, "Valid price and amount required"); return; }
 
     statusEl.className = "status"; statusEl.innerText = "Creating " + ORDER_SIDE + " order...";
@@ -616,7 +691,7 @@ function createOrder() {
 
     var stateObj = '{"0":"' + MY_PUBKEY + '","1":"' + MY_HEX_ADDR + '","2":"' + wantAmt + '","3":"' + wantTok + '","4":"' + orderId + '","5":"' + sideNum + '","6":"' + price + '"}';
 
-    var cmd = "send amount:" + lockAmt + " address:" + SCRIPT_ADDR + " state:" + stateObj;
+    var cmd = "send amount:" + lockAmt + " address:" + SCRIPT_ADDR_V2 + " state:" + stateObj;
     if (lockTok) cmd += " tokenid:" + lockTok;
 
     logActivity("Sending " + lockAmt + " " + unit + " to contract...", "info");
