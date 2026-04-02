@@ -150,25 +150,22 @@ function finishInit() {
             "  `block` int NOT NULL," +
             "  `timestamp` bigint NOT NULL" +
             ")", function() {
-                MDS.sql(
-                    "CREATE TABLE IF NOT EXISTS `activitylog` (" +
-                    "  `id` bigint auto_increment," +
-                    "  `msg` varchar(512) NOT NULL," +
-                    "  `type` varchar(10) NOT NULL," +
-                    "  `timestamp` bigint NOT NULL" +
-                    ")", function() {
-                    // Trim old entries beyond 100
-                    MDS.sql("DELETE FROM activitylog WHERE id NOT IN (SELECT id FROM activitylog ORDER BY timestamp DESC LIMIT 100)", function() {
-                        DB_READY = true;
-                        MDS.log("Limit v0.3.9 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
-                        loadActivityLog(function() {
-                            logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
-                            cleanupZombieTxns();
-                            refreshOrders(); refreshBalances(); loadFills();
-                        });
-                    });
+            MDS.sql(
+                "CREATE TABLE IF NOT EXISTS `activitylog` (" +
+                "  `id` bigint auto_increment," +
+                "  `msg` varchar(512) NOT NULL," +
+                "  `type` varchar(10) NOT NULL," +
+                "  `timestamp` bigint NOT NULL" +
+                ")", function() {
+                DB_READY = true;
+                MDS.log("Limit v0.3.9 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
+                loadActivityLog(function() {
+                    logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
+                    cleanupZombieTxns();
+                    refreshOrders(); refreshBalances(); loadFills();
                 });
-        );
+            });
+        });
     });
 }
 
