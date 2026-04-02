@@ -1,5 +1,5 @@
 /**
- * Limit v0.3.9 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v0.4.0 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
@@ -41,6 +41,7 @@ var PREV_ORDER_COUNT = -1;     // track order book changes
 var PREV_MINIMA_BAL = null;    // track balance changes
 var PREV_USDT_BAL = null;
 var PENDING_FILL_COINID = null; // coinid of order being filled — watch for removal
+var PENDING_CREATE = false;    // true after order send — watch for new mine order to appear
 
 // -- Init --
 MDS.init(function(msg) {
@@ -59,7 +60,7 @@ function initApp() {
     MDS.cmd('newscript script:"' + SCRIPT + '" trackall:true', function(res) {
         if (res.status) {
             SCRIPT_ADDR = res.response.address;
-            MDS.log("Limit v0.3.9 contract: " + SCRIPT_ADDR);
+            MDS.log("Limit v0.4.0 contract: " + SCRIPT_ADDR);
         } else {
             MDS.log("SCRIPT ERROR: " + JSON.stringify(res.error));
         }
@@ -158,7 +159,7 @@ function finishInit() {
                 "  `timestamp` bigint NOT NULL" +
                 ")", function() {
                 DB_READY = true;
-                MDS.log("Limit v0.3.9 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
+                MDS.log("Limit v0.4.0 ready. Script=" + SCRIPT_ADDR + " Pub=" + MY_PUBKEY.substring(0, 16) + "... Keys=" + Object.keys(MY_KEYS).length);
                 loadActivityLog(function() {
                     logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
                     cleanupZombieTxns();
@@ -426,6 +427,14 @@ function refreshOrders() {
                 PENDING_FILL_COINID = null;
             }
         }
+        // Check if a pending order creation has been confirmed on-chain
+        if (PENDING_CREATE && PREV_ORDER_COUNT >= 0 && orderCoins.length > PREV_ORDER_COUNT) {
+            PENDING_CREATE = false;
+            logActivity("Order confirmed on-chain!", "ok");
+            logActivity("Waiting for balance update...", "info");
+            var csEl = document.getElementById("createStatus");
+            if (csEl) { csEl.className = "status status--ok"; csEl.innerText = "Order confirmed on-chain!"; setTimeout(function() { csEl.innerText = ""; csEl.className = "status"; }, 5000); }
+        }
         // Log order book changes
         if (PREV_ORDER_COUNT >= 0 && orderCoins.length !== PREV_ORDER_COUNT) {
             var diff = orderCoins.length - PREV_ORDER_COUNT;
@@ -588,15 +597,17 @@ function createOrder() {
     }
 
     // Check sendable balance before attempting
+    logActivity("Checking balance...", "info");
+    var unit = lockTok ? "USDT" : "MINIMA";
     MDS.cmd("balance", function(balRes) {
-        if (!balRes.status) { showErr(statusEl, "Could not check balance"); return; }
+        if (!balRes.status) { showErr(statusEl, "Could not check balance"); logActivity("Balance check failed", "err"); return; }
         var sendable = "0";
         var checkTok = lockTok || "0x00";
         (balRes.response || []).forEach(function(b) {
             if (b.tokenid === checkTok) sendable = b.sendable;
         });
+        logActivity("Sendable " + unit + ": " + parseFloat(sendable).toFixed(4) + " — need " + lockAmt, "info");
         if (parseFloat(sendable) < parseFloat(lockAmt)) {
-            var unit = lockTok ? "USDT" : "MINIMA";
             var errMsg = "Insufficient " + unit + " — need " + lockAmt + ", have " + parseFloat(sendable).toFixed(4);
             showErr(statusEl, errMsg);
             logActivity(errMsg, "err");
@@ -608,12 +619,15 @@ function createOrder() {
     var cmd = "send amount:" + lockAmt + " address:" + SCRIPT_ADDR + " state:" + stateObj;
     if (lockTok) cmd += " tokenid:" + lockTok;
 
+    logActivity("Sending " + lockAmt + " " + unit + " to contract...", "info");
     MDS.log("CREATE: " + cmd);
     MDS.cmd(cmd, function(res) {
         if (isPending(res)) { showPending(statusEl, "Order queued — approve in Pending Actions"); logActivity("Order pending — approve in Pending Actions", "warn"); return; }
         if (res.status) {
-            showOk(statusEl, "Order placed! Waiting for confirmation...");
+            showOk(statusEl, "Order sent to network...");
             logActivity(ORDER_SIDE.toUpperCase() + " order placed — " + amt + " MINIMA @ " + price + " USDT", "ok");
+            logActivity("Waiting for on-chain confirmation...", "warn");
+            PENDING_CREATE = true;
             document.getElementById("orderAmount").value = "";
             document.getElementById("orderPrice").value = "";
             document.getElementById("totalSummary").innerText = "0.00";
@@ -631,13 +645,14 @@ function cancelOrder(coinid) {
     var order = ORDERS.find(function(o) { return o.coinid === coinid; });
     if (!order) return;
     MDS.notify("Cancelling order...");
-    logActivity("Cancelling order...", "info");
+    logActivity("Cancelling " + order.side.toUpperCase() + " order — " + parseFloat(order.amount).toFixed(4) + " @ " + fmtPrice(order.price), "info");
+    logActivity("Building cancel transaction...", "info");
 
     var txid = "cancel_" + Date.now();
     var cancelAmt = order.amount;
 
     MDS.cmd("txncreate id:" + txid, function(r0) {
-        if (!r0.status) { MDS.notify("Cancel failed: txncreate"); return; }
+        if (!r0.status) { MDS.notify("Cancel failed: txncreate"); logActivity("Cancel failed — txncreate error", "err"); return; }
 
         MDS.cmd("txninput id:" + txid + " coinid:" + coinid, function(r1) {
             if (!r1.status) { showErr(null, "Cancel input failed", txid); return; }
@@ -670,6 +685,7 @@ function cancelOrder(coinid) {
                         return;
                     }
                     // Native MDS: sign succeeded, continue
+                    logActivity("Signed — posting cancellation...", "info");
                     CANCEL_STATUS[coinid] = "confirming";
                     renderMyOrders();
                     var csEl = document.getElementById("cancelStatus");
@@ -682,7 +698,7 @@ function cancelOrder(coinid) {
                             renderMyOrders();
                             csEl.className = "status status--ok";
                             csEl.innerText = "Order cancelled!";
-                            logActivity("Order cancelled", "ok");
+                            logActivity("Cancel posted — waiting for confirmation...", "ok");
                             refreshOrders(); refreshBalances();
                         } else {
                             delete CANCEL_STATUS[coinid];
