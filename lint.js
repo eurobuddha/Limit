@@ -225,6 +225,7 @@ function autoCollectExpired() {
                 var age = currentBlock - created;
                 if (age <= 1500) return;
                 logActivity("Collecting expired order — " + parseFloat(o.amount).toFixed(4) + " (age: " + age + " blocks)", "warn");
+                CANCEL_STATUS[o.coinid] = "collecting";
                 var txid = "collect_" + Date.now();
                 MDS.cmd("txncreate id:" + txid, function(r0) {
                     if (!r0.status) { logActivity("Collect failed — txncreate", "err"); return; }
@@ -342,7 +343,7 @@ function renderTradeStats() {
 
 function backfillMyTrades(callback) {
     MDS.sql("SELECT COUNT(*) AS C FROM mytrades", function(res) {
-        if (res.status && res.rows && res.rows[0].C === "0") {
+        if (res.status && res.rows && parseInt(res.rows[0].C) === 0) {
             MDS.sql("SELECT COUNT(*) AS C FROM fills", function(fres) {
                 if (fres.status && fres.rows && parseInt(fres.rows[0].C) > 0) {
                     MDS.sql("INSERT INTO mytrades (orderid, role, side, price, amount, total, gecko_price, block, timestamp) " +
