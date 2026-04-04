@@ -248,43 +248,24 @@ function autoCollectExpired() {
         logActivity("Collecting expired order — " + parseFloat(amt).toFixed(4) + " back to owner", "warn");
         CANCEL_STATUS[c.coinid] = "collecting";
         var txid = "collect_" + Date.now() + "_" + Math.random().toString(36).substring(2, 6);
-        // Need a wallet coin for signing — Minima requires at least one signature
-        findCoins("0x00", 0.001, function(walletResult) {
-            if (!walletResult) { logActivity("Collect skipped — no wallet coin for signing", "warn"); delete CANCEL_STATUS[c.coinid]; return; }
-            var walletCoin = walletResult.coins[0];
-            var walletAmt = coinAmt(walletCoin);
-            MDS.cmd("txncreate id:" + txid, function(r0) {
-                if (!r0.status) { logActivity("Collect failed — txncreate", "err"); delete CANCEL_STATUS[c.coinid]; return; }
-                // Input 0: expired order coin
-                MDS.cmd("txninput id:" + txid + " coinid:" + c.coinid, function(r1) {
-                    if (!r1.status) { logActivity("Collect failed — txninput", "err"); MDS.cmd("txndelete id:" + txid); delete CANCEL_STATUS[c.coinid]; return; }
-                    // Input 1: small wallet coin for signing
-                    MDS.cmd("txninput id:" + txid + " coinid:" + walletCoin.coinid, function(r1b) {
-                        if (!r1b.status) { logActivity("Collect failed — wallet input", "err"); MDS.cmd("txndelete id:" + txid); delete CANCEL_STATUS[c.coinid]; return; }
-                        // Output 0: return order coin to owner
-                        var outCmd = "txnoutput id:" + txid + " amount:" + amt + " address:" + ownerAddr + " storestate:false";
-                        if (c.tokenid !== "0x00") outCmd += " tokenid:" + c.tokenid;
-                        MDS.cmd(outCmd, function(r2) {
-                            if (!r2.status) { logActivity("Collect failed — txnoutput", "err"); MDS.cmd("txndelete id:" + txid); delete CANCEL_STATUS[c.coinid]; return; }
-                            // Output 1: return wallet coin to self (change)
-                            MDS.cmd("txnoutput id:" + txid + " amount:" + walletAmt + " address:" + MY_HEX_ADDR + " storestate:false", function(r3) {
-                                if (!r3.status) { logActivity("Collect failed — change output", "err"); MDS.cmd("txndelete id:" + txid); delete CANCEL_STATUS[c.coinid]; return; }
-                                MDS.cmd("txnsign id:" + txid + " publickey:auto", function(sr) {
-                                    if (isPending(sr)) { logActivity("Collect pending — approve in Pending Actions", "warn"); return; }
-                                    logActivity("Signed — posting collection...", "info");
-                                    MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(pr) {
-                                        var rp = Array.isArray(pr) ? pr[pr.length - 1] : pr;
-                                        if (rp && rp.status) {
-                                            logActivity("Expired order collected — funds returning to owner", "ok");
-                                        } else {
-                                            logActivity("Collect failed — " + (rp ? rp.error || "unknown" : "no response"), "err");
-                                            MDS.cmd("txndelete id:" + txid);
-                                            delete CANCEL_STATUS[c.coinid];
-                                        }
-                                    });
-                                });
-                            });
-                        });
+        MDS.cmd("txncreate id:" + txid, function(r0) {
+            if (!r0.status) { logActivity("Collect failed — txncreate", "err"); delete CANCEL_STATUS[c.coinid]; return; }
+            MDS.cmd("txninput id:" + txid + " coinid:" + c.coinid, function(r1) {
+                if (!r1.status) { logActivity("Collect failed — txninput", "err"); MDS.cmd("txndelete id:" + txid); delete CANCEL_STATUS[c.coinid]; return; }
+                var outCmd = "txnoutput id:" + txid + " amount:" + amt + " address:" + ownerAddr + " storestate:false";
+                if (c.tokenid !== "0x00") outCmd += " tokenid:" + c.tokenid;
+                MDS.cmd(outCmd, function(r2) {
+                    if (!r2.status) { logActivity("Collect failed — txnoutput", "err"); MDS.cmd("txndelete id:" + txid); delete CANCEL_STATUS[c.coinid]; return; }
+                    // COINAGE path needs no signature — post directly
+                    MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(pr) {
+                        var rp = Array.isArray(pr) ? pr[pr.length - 1] : pr;
+                        if (rp && rp.status) {
+                            logActivity("Expired order collected — funds returning to owner", "ok");
+                        } else {
+                            logActivity("Collect failed — " + (rp ? rp.error || "unknown" : "no response"), "err");
+                            MDS.cmd("txndelete id:" + txid);
+                            delete CANCEL_STATUS[c.coinid];
+                        }
                     });
                 });
             });
