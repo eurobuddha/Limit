@@ -1,5 +1,5 @@
 /**
- * Limit v0.4.7 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v0.4.8 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
@@ -30,8 +30,9 @@
 var SCRIPT_V1 = 'IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE) RETURN TRUE';
 var SCRIPT_V2 = 'IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF IF @COINAGE GT 1500 THEN ASSERT VERIFYOUT(@INPUT PREVSTATE(1) @AMOUNT @TOKENID FALSE) RETURN TRUE ENDIF ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE) RETURN TRUE';
 var USDT_ID = "0x7D39745FBD29049BE29850B55A18BF550E4D442F930F86266E34193D89042A90";
-var SCRIPT_ADDR_V1 = "";  // legacy (no expiry)
-var SCRIPT_ADDR_V2 = "";  // current (1500 block expiry)
+var SCRIPT_ADDR_V1 = "0x131609A5E510326354647E240F51C53825EFF8CA2B9DE07711EA56055E57672D";
+var SCRIPT_ADDR_V2 = "0xE4D3F27BB044500AF56EF775DAFF3A12187EE79A8460FBBBF321F76A660D7797";
+var SCRIPTS_REGISTERED = false;
 var DB_READY = false;
 var MY_ADDR = "";
 var MY_HEX_ADDR = "";
@@ -68,14 +69,11 @@ MDS.init(function(msg) {
 });
 
 function initApp() {
-    MDS.cmd('newscript script:"' + SCRIPT_V1 + '" trackall:true', function(r1) {
-        if (r1.status) SCRIPT_ADDR_V1 = r1.response.address;
-        MDS.cmd('newscript script:"' + SCRIPT_V2 + '" trackall:true', function(r2) {
-            if (r2.status) SCRIPT_ADDR_V2 = r2.response.address;
-            MDS.log("Limit v0.4.7 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
-            loadIdentity(function() { finishInit(); });
-        });
-    });
+    // Addresses are hardcoded — skip newscript on startup (avoids pending prompts)
+    // Register scripts lazily in background after 3 seconds
+    MDS.log("Limit v0.4.8 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
+    loadIdentity(function() { finishInit(); });
+    setTimeout(registerScripts, 3000);
     MDS.cmd("block", function(res) {
         if (res.status) document.getElementById("blockHeight").innerText = "#" + res.response.block;
     });
@@ -83,8 +81,30 @@ function initApp() {
     fetchGeckoPrice();
     setInterval(fetchGeckoPrice, 60000);
     window.addEventListener('beforeunload', function() {
-        if (SCRIPT_ADDR_V1) MDS.cmd('newscript script:"' + SCRIPT_V1 + '" track:false');
-        if (SCRIPT_ADDR_V2) MDS.cmd('newscript script:"' + SCRIPT_V2 + '" track:false');
+        if (SCRIPTS_REGISTERED) {
+            MDS.cmd('newscript script:"' + SCRIPT_V1 + '" track:false');
+            MDS.cmd('newscript script:"' + SCRIPT_V2 + '" track:false');
+        }
+    });
+}
+
+function registerScripts() {
+    if (SCRIPTS_REGISTERED) return;
+    MDS.cmd('newscript script:"' + SCRIPT_V1 + '" trackall:true', function() {
+        MDS.cmd('newscript script:"' + SCRIPT_V2 + '" trackall:true', function() {
+            SCRIPTS_REGISTERED = true;
+            MDS.log("Scripts registered with trackall:true");
+        });
+    });
+}
+
+function ensureRegistered(callback) {
+    if (SCRIPTS_REGISTERED) { callback(); return; }
+    MDS.cmd('newscript script:"' + SCRIPT_V1 + '" trackall:true', function() {
+        MDS.cmd('newscript script:"' + SCRIPT_V2 + '" trackall:true', function() {
+            SCRIPTS_REGISTERED = true;
+            callback();
+        });
     });
 }
 
@@ -154,50 +174,68 @@ function isMyKey(pubkey) {
 
 function finishInit() {
     loadWalletKeys(function() {
+        // Check if tables exist with a read — only CREATE if needed (avoids pending prompts)
+        MDS.sql("SELECT 1 FROM fills LIMIT 1", function(fcheck) {
+            var tablesExist = fcheck.status;
+            if (tablesExist) {
+                // Tables already exist — skip creation, go straight to ready
+                onTablesReady();
+            } else {
+                // First run — create tables (will trigger pending on restricted MDS)
+                createTables(function() { onTablesReady(); });
+            }
+        });
+    });
+}
+
+function createTables(callback) {
+    MDS.sql(
+        "CREATE TABLE IF NOT EXISTS `fills` (" +
+        "  `id` bigint auto_increment," +
+        "  `orderid` varchar(160) NOT NULL," +
+        "  `side` varchar(10) NOT NULL," +
+        "  `price` varchar(80) NOT NULL," +
+        "  `amount` varchar(80) NOT NULL," +
+        "  `total` varchar(80) NOT NULL," +
+        "  `block` int NOT NULL," +
+        "  `timestamp` bigint NOT NULL" +
+        ")", function() {
         MDS.sql(
-            "CREATE TABLE IF NOT EXISTS `fills` (" +
+            "CREATE TABLE IF NOT EXISTS `activitylog` (" +
             "  `id` bigint auto_increment," +
-            "  `orderid` varchar(160) NOT NULL," +
-            "  `side` varchar(10) NOT NULL," +
-            "  `price` varchar(80) NOT NULL," +
-            "  `amount` varchar(80) NOT NULL," +
-            "  `total` varchar(80) NOT NULL," +
-            "  `block` int NOT NULL," +
+            "  `msg` varchar(512) NOT NULL," +
+            "  `type` varchar(10) NOT NULL," +
             "  `timestamp` bigint NOT NULL" +
             ")", function() {
             MDS.sql(
-                "CREATE TABLE IF NOT EXISTS `activitylog` (" +
+                "CREATE TABLE IF NOT EXISTS `mytrades` (" +
                 "  `id` bigint auto_increment," +
-                "  `msg` varchar(512) NOT NULL," +
-                "  `type` varchar(10) NOT NULL," +
+                "  `orderid` varchar(160) NOT NULL," +
+                "  `role` varchar(10) NOT NULL," +
+                "  `side` varchar(10) NOT NULL," +
+                "  `price` varchar(80) NOT NULL," +
+                "  `amount` varchar(80) NOT NULL," +
+                "  `total` varchar(80) NOT NULL," +
+                "  `gecko_price` varchar(80) NOT NULL," +
+                "  `block` int NOT NULL," +
                 "  `timestamp` bigint NOT NULL" +
-                ")", function() {
-                MDS.sql(
-                    "CREATE TABLE IF NOT EXISTS `mytrades` (" +
-                    "  `id` bigint auto_increment," +
-                    "  `orderid` varchar(160) NOT NULL," +
-                    "  `role` varchar(10) NOT NULL," +
-                    "  `side` varchar(10) NOT NULL," +
-                    "  `price` varchar(80) NOT NULL," +
-                    "  `amount` varchar(80) NOT NULL," +
-                    "  `total` varchar(80) NOT NULL," +
-                    "  `gecko_price` varchar(80) NOT NULL," +
-                    "  `block` int NOT NULL," +
-                    "  `timestamp` bigint NOT NULL" +
-                    ")", function() {
-                    DB_READY = true;
-                    MDS.log("Limit v0.4.7 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
-                    // Backfill mytrades from fills on first run
-                    backfillMyTrades(function() {
-                        loadActivityLog(function() {
-                            logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
-                            cleanupZombieTxns();
-                            cleanupForeignCoins();
-                            refreshOrders(); refreshBalances(); loadFills(); loadMyTrades();
-                        });
-                    });
-                });
-            });
+                ")", function() { if (callback) callback(); });
+        });
+    });
+}
+
+function onTablesReady() {
+    DB_READY = true;
+    MDS.log("Limit v0.4.8 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
+    backfillMyTrades(function() {
+        loadActivityLog(function() {
+            logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
+            refreshOrders(); refreshBalances(); loadFills(); loadMyTrades();
+            // Defer write-heavy cleanup operations
+            setTimeout(function() {
+                cleanupZombieTxns();
+                cleanupForeignCoins();
+            }, 10000);
         });
     });
 }
@@ -813,6 +851,7 @@ function createOrder() {
     var price = document.getElementById("orderPrice").value.trim();
     var amt = document.getElementById("orderAmount").value.trim();
     var statusEl = document.getElementById("createStatus");
+    if (!SCRIPTS_REGISTERED) { ensureRegistered(createOrder); return; }
 
     if (!MY_PUBKEY || !MY_HEX_ADDR) { showErr(statusEl, "Identity not loaded"); return; }
     if (!SCRIPT_ADDR_V2) { showErr(statusEl, "Contract not registered"); return; }
@@ -892,6 +931,7 @@ function createOrder() {
 // -- Cancel Order --
 // Sign with owner key explicitly, then txnpost auto:true (runs txnbasics internally)
 function cancelOrder(coinid) {
+    if (!SCRIPTS_REGISTERED) { ensureRegistered(function() { cancelOrder(coinid); }); return; }
     var order = ORDERS.find(function(o) { return o.coinid === coinid; });
     if (!order) return;
     MDS.notify("Cancelling order...");
@@ -1027,6 +1067,7 @@ function executeFill() {
 // Fill SELL order: I pay USDT (wantAmt), I get Minima
 // VERIFYOUT checks: output[@INPUT] = (wantAddr, wantAmt, wantTok=USDT)
 function fillSellOrder() {
+    if (!SCRIPTS_REGISTERED) { ensureRegistered(fillSellOrder); return; }
     var order = FILL_ORDER;
     var statusEl = document.getElementById("fillStatus");
     var orderAmt = parseFloat(order.amount);  // Minima in order
@@ -1141,6 +1182,7 @@ function fillSellOrder() {
 // Fill BUY order: I send Minima (wantAmt), I get USDT
 // VERIFYOUT checks: output[@INPUT] = (wantAddr, wantAmt, wantTok=0x00)
 function fillBuyOrder() {
+    if (!SCRIPTS_REGISTERED) { ensureRegistered(fillBuyOrder); return; }
     var order = FILL_ORDER;
     var statusEl = document.getElementById("fillStatus");
     var usdtAmt = parseFloat(order.amount);   // USDT in order
