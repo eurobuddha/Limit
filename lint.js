@@ -1,5 +1,5 @@
 /**
- * Limit v0.4.6 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v0.4.7 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
@@ -59,7 +59,7 @@ MDS.init(function(msg) {
     if (msg.event === "inited") initApp();
     if (msg.event === "NEWBLOCK") {
         updateBlock(msg);
-        if (DB_READY) { refreshOrders(); refreshBalances(); autoCollectExpired(); }
+        if (DB_READY) { refreshOrders(); refreshBalances(); }
         if (PENDING_TXID) checkPendingComplete();
     }
     if (msg.event === "NEWBALANCE") {
@@ -72,7 +72,7 @@ function initApp() {
         if (r1.status) SCRIPT_ADDR_V1 = r1.response.address;
         MDS.cmd('newscript script:"' + SCRIPT_V2 + '" trackall:true', function(r2) {
             if (r2.status) SCRIPT_ADDR_V2 = r2.response.address;
-            MDS.log("Limit v0.4.6 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
+            MDS.log("Limit v0.4.7 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
             loadIdentity(function() { finishInit(); });
         });
     });
@@ -186,7 +186,7 @@ function finishInit() {
                     "  `timestamp` bigint NOT NULL" +
                     ")", function() {
                     DB_READY = true;
-                    MDS.log("Limit v0.4.6 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
+                    MDS.log("Limit v0.4.7 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
                     // Backfill mytrades from fills on first run
                     backfillMyTrades(function() {
                         loadActivityLog(function() {
@@ -248,25 +248,42 @@ function autoCollectExpired() {
         logActivity("Collecting expired order — " + parseFloat(amt).toFixed(4) + " back to owner", "warn");
         CANCEL_STATUS[c.coinid] = "collecting";
         var txid = "collect_" + Date.now() + "_" + Math.random().toString(36).substring(2, 6);
-        MDS.cmd("txncreate id:" + txid, function(r0) {
-            if (!r0.status) { logActivity("Collect failed — txncreate", "err"); delete CANCEL_STATUS[c.coinid]; return; }
-            MDS.cmd("txninput id:" + txid + " coinid:" + c.coinid, function(r1) {
-                if (!r1.status) { logActivity("Collect failed — txninput", "err"); MDS.cmd("txndelete id:" + txid); delete CANCEL_STATUS[c.coinid]; return; }
-                var outCmd = "txnoutput id:" + txid + " amount:" + amt + " address:" + ownerAddr + " storestate:false";
-                if (c.tokenid !== "0x00") outCmd += " tokenid:" + c.tokenid;
-                MDS.cmd(outCmd, function(r2) {
-                    if (!r2.status) { logActivity("Collect failed — txnoutput", "err"); MDS.cmd("txndelete id:" + txid); delete CANCEL_STATUS[c.coinid]; return; }
-                    MDS.cmd("txnsign id:" + txid + " publickey:auto", function(sr) {
-                        if (isPending(sr)) { logActivity("Collect pending — approve in Pending Actions", "warn"); return; }
-                        MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(pr) {
-                            var rp = Array.isArray(pr) ? pr[pr.length - 1] : pr;
-                            if (rp && rp.status) {
-                                logActivity("Expired order collected — funds returning to owner", "ok");
-                            } else {
-                                logActivity("Collect failed — " + (rp ? rp.error || "unknown" : "no response"), "err");
-                                MDS.cmd("txndelete id:" + txid);
-                                delete CANCEL_STATUS[c.coinid];
-                            }
+        // Need a wallet coin for signing — Minima requires at least one signature
+        findCoins("0x00", 0.001, function(walletResult) {
+            if (!walletResult) { logActivity("Collect skipped — no wallet coin for signing", "warn"); delete CANCEL_STATUS[c.coinid]; return; }
+            var walletCoin = walletResult.coins[0];
+            var walletAmt = coinAmt(walletCoin);
+            MDS.cmd("txncreate id:" + txid, function(r0) {
+                if (!r0.status) { logActivity("Collect failed — txncreate", "err"); delete CANCEL_STATUS[c.coinid]; return; }
+                // Input 0: expired order coin
+                MDS.cmd("txninput id:" + txid + " coinid:" + c.coinid, function(r1) {
+                    if (!r1.status) { logActivity("Collect failed — txninput", "err"); MDS.cmd("txndelete id:" + txid); delete CANCEL_STATUS[c.coinid]; return; }
+                    // Input 1: small wallet coin for signing
+                    MDS.cmd("txninput id:" + txid + " coinid:" + walletCoin.coinid, function(r1b) {
+                        if (!r1b.status) { logActivity("Collect failed — wallet input", "err"); MDS.cmd("txndelete id:" + txid); delete CANCEL_STATUS[c.coinid]; return; }
+                        // Output 0: return order coin to owner
+                        var outCmd = "txnoutput id:" + txid + " amount:" + amt + " address:" + ownerAddr + " storestate:false";
+                        if (c.tokenid !== "0x00") outCmd += " tokenid:" + c.tokenid;
+                        MDS.cmd(outCmd, function(r2) {
+                            if (!r2.status) { logActivity("Collect failed — txnoutput", "err"); MDS.cmd("txndelete id:" + txid); delete CANCEL_STATUS[c.coinid]; return; }
+                            // Output 1: return wallet coin to self (change)
+                            MDS.cmd("txnoutput id:" + txid + " amount:" + walletAmt + " address:" + MY_HEX_ADDR + " storestate:false", function(r3) {
+                                if (!r3.status) { logActivity("Collect failed — change output", "err"); MDS.cmd("txndelete id:" + txid); delete CANCEL_STATUS[c.coinid]; return; }
+                                MDS.cmd("txnsign id:" + txid + " publickey:auto", function(sr) {
+                                    if (isPending(sr)) { logActivity("Collect pending — approve in Pending Actions", "warn"); return; }
+                                    logActivity("Signed — posting collection...", "info");
+                                    MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(pr) {
+                                        var rp = Array.isArray(pr) ? pr[pr.length - 1] : pr;
+                                        if (rp && rp.status) {
+                                            logActivity("Expired order collected — funds returning to owner", "ok");
+                                        } else {
+                                            logActivity("Collect failed — " + (rp ? rp.error || "unknown" : "no response"), "err");
+                                            MDS.cmd("txndelete id:" + txid);
+                                            delete CANCEL_STATUS[c.coinid];
+                                        }
+                                    });
+                                });
+                            });
                         });
                     });
                 });
@@ -658,6 +675,7 @@ function refreshOrders() {
             }
             PREV_ORDER_COUNT = liveCoins.length;
             parseOrderCoins(liveCoins);
+            autoCollectExpired();
         });
     }
     if (SCRIPT_ADDR_V1) {
@@ -877,8 +895,14 @@ function createOrder() {
             document.getElementById("orderPrice").value = "";
             document.getElementById("totalSummary").innerText = "0.00";
         } else {
-            showErr(statusEl, res.error || "Failed to create order");
-            logActivity("Order failed — " + (res.error || "unknown error"), "err");
+            var createErr = res.error || "Failed to create order";
+            if (createErr.indexOf("LOCKED") >= 0) {
+                showErr(statusEl, "Node keys are LOCKED — unlock your vault to trade");
+                logActivity("KEYS LOCKED — unlock your node vault to create orders", "err");
+            } else {
+                showErr(statusEl, createErr);
+                logActivity("Order failed — " + createErr, "err");
+            }
         }
     });
     }); // end balance check
@@ -927,6 +951,18 @@ function cancelOrder(coinid) {
                                 refreshOrders(); refreshBalances();
                             }
                         });
+                        return;
+                    }
+                    if (signRes && !signRes.status) {
+                        var serr = signRes.error || "";
+                        if (serr.indexOf("LOCKED") >= 0) {
+                            logActivity("KEYS LOCKED — unlock your node vault to cancel orders", "err");
+                            var csEl = document.getElementById("cancelStatus");
+                            if (csEl) { csEl.className = "status status--err"; csEl.innerText = "Node keys are LOCKED — unlock your vault"; }
+                        } else {
+                            logActivity("Cancel sign failed — " + serr, "err");
+                        }
+                        MDS.cmd("txndelete id:" + txid);
                         return;
                     }
                     // Native MDS: sign succeeded, continue
@@ -1066,12 +1102,21 @@ function fillSellOrder() {
                                 MDS.cmd("txnsign id:" + txid + " publickey:auto", function(signRes) {
                                     MDS.log("FILL-SELL sign: status=" + (signRes ? signRes.status : "null") + " err=" + (signRes ? signRes.error || "none" : "no response"));
                                     if (isPending(signRes)) {
-                                        // Restricted MDS: pending will be auto-completed on NEWBLOCK
                                         showPending(statusEl, "Approve fill in Pending Actions — will auto-complete", txid, onFillComplete);
                                         logActivity("Fill pending — approve in Pending Actions", "warn");
                                         return;
                                     }
-                                    // Native MDS: sign succeeded, continue with basics+post
+                                    if (signRes && !signRes.status) {
+                                        var serr = signRes.error || "";
+                                        if (serr.indexOf("LOCKED") >= 0) {
+                                            showErr(statusEl, "Node keys are LOCKED — unlock your vault to trade", txid);
+                                            logActivity("KEYS LOCKED — unlock your node vault to sign transactions", "err");
+                                        } else {
+                                            showErr(statusEl, "Sign failed: " + serr, txid);
+                                            logActivity("Sign failed — " + serr, "err");
+                                        }
+                                        return;
+                                    }
                                     logActivity("Signed — posting to network...", "info");
                                     statusEl.innerText = "Posting...";
                                     MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(resArr) {
@@ -1171,6 +1216,17 @@ function fillBuyOrder() {
                                     if (isPending(signRes)) {
                                         showPending(statusEl, "Approve fill in Pending Actions — will auto-complete", txid, onFillComplete);
                                         logActivity("Fill pending — approve in Pending Actions", "warn");
+                                        return;
+                                    }
+                                    if (signRes && !signRes.status) {
+                                        var serr = signRes.error || "";
+                                        if (serr.indexOf("LOCKED") >= 0) {
+                                            showErr(statusEl, "Node keys are LOCKED — unlock your vault to trade", txid);
+                                            logActivity("KEYS LOCKED — unlock your node vault to sign transactions", "err");
+                                        } else {
+                                            showErr(statusEl, "Sign failed: " + serr, txid);
+                                            logActivity("Sign failed — " + serr, "err");
+                                        }
                                         return;
                                     }
                                     logActivity("Signed — posting to network...", "info");
