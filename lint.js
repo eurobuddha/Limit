@@ -231,6 +231,7 @@ function onTablesReady() {
     backfillMyTrades(function() {
         loadActivityLog(function() {
             logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
+            logActivity("Remember: press EXIT when done to clear tracked coins from your wallet", "warn");
             refreshOrders(); refreshBalances(); loadFills(); loadMyTrades();
             setTimeout(cleanupZombieTxns, 5000);
         });
