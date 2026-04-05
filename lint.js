@@ -32,7 +32,6 @@ var SCRIPT_V2 = 'IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF IF @COINAGE GT
 var USDT_ID = "0x7D39745FBD29049BE29850B55A18BF550E4D442F930F86266E34193D89042A90";
 var SCRIPT_ADDR_V1 = "0x131609A5E510326354647E240F51C53825EFF8CA2B9DE07711EA56055E57672D";
 var SCRIPT_ADDR_V2 = "0xE4D3F27BB044500AF56EF775DAFF3A12187EE79A8460FBBBF321F76A660D7797";
-var SCRIPTS_REGISTERED = true;  // scripts registered on init, no lazy loading needed
 var DB_READY = false;
 var MY_ADDR = "";
 var MY_HEX_ADDR = "";
@@ -73,7 +72,6 @@ function initApp() {
     // Register scripts without tracking — coins address: works without trackall
     MDS.cmd('newscript script:"' + SCRIPT_V1 + '"');
     MDS.cmd('newscript script:"' + SCRIPT_V2 + '"');
-    SCRIPTS_REGISTERED = true;
     MDS.log("Limit v0.5.1 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
     loadIdentity(function() { finishInit(); });
     MDS.cmd("block", function(res) {
