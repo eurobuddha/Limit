@@ -232,32 +232,9 @@ function onTablesReady() {
         loadActivityLog(function() {
             logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
             refreshOrders(); refreshBalances(); loadFills(); loadMyTrades();
-            // Deferred cleanup — runs once after startup
-            setTimeout(function() {
-                cleanupZombieTxns();
-                cleanupForeignCoins();
-            }, 5000);
+            setTimeout(cleanupZombieTxns, 5000);
         });
     });
-}
-
-function cleanupForeignCoins() {
-    function cleanAddr(addr) {
-        if (!addr) return;
-        MDS.cmd("coins address:" + addr, function(res) {
-            if (!res.status || !res.response) return;
-            var count = 0;
-            res.response.forEach(function(c) {
-                if (!isMyKey(getState(c, 0))) {
-                    MDS.cmd("cointrack enable:false coinid:" + c.coinid);
-                    count++;
-                }
-            });
-            if (count > 0) MDS.log("Startup cleanup: untracked " + count + " foreign coins at " + addr.substring(0, 12));
-        });
-    }
-    cleanAddr(SCRIPT_ADDR_V1);
-    cleanAddr(SCRIPT_ADDR_V2);
 }
 
 function cleanupZombieTxns() {
