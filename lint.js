@@ -838,7 +838,8 @@ function renderMyOrders() {
             var ageColor = pct > 90 ? "var(--red)" : pct > 70 ? "var(--accent)" : "var(--dim)";
             var remaining = Math.max(0, 1500 - age);
             var hoursLeft = (remaining * 50 / 3600).toFixed(1);
-            ageHtml = '<span style="font-size:10px;color:' + ageColor + ';" title="' + age + '/' + '1500 blocks">' + hoursLeft + 'h left</span>';
+            var refreshBtn = !cancelState ? '<button class="btn btn--ghost btn--sm" onclick="refreshSingleOrder(\'' + safeCoinId + '\')" title="Reset expiry clock" style="font-size:10px;padding:2px 5px;">↻</button>' : '';
+            ageHtml = '<span style="font-size:10px;color:' + ageColor + ';" title="' + age + '/' + '1500 blocks">' + hoursLeft + 'h left</span><br>' + refreshBtn;
         }
         var actionHtml;
         if (cancelState === "pending") {
@@ -848,8 +849,7 @@ function renderMyOrders() {
         } else if (cancelState === "confirmed") {
             actionHtml = '<span class="cancel-status cancel-status--confirmed">CANCELLED</span>';
         } else {
-            var refreshBtn = (o.address === SCRIPT_ADDR_V2) ? '<button class="btn btn--ghost btn--sm" onclick="refreshSingleOrder(\'' + safeCoinId + '\')" title="Reset expiry clock" style="font-size:10px;padding:2px 5px;">↻</button>' : '';
-            actionHtml = refreshBtn + '<button class="btn btn--cancel btn--sm" onclick="cancelOrder(\'' + safeCoinId + '\')">X</button>';
+            actionHtml = '<button class="btn btn--cancel btn--sm" onclick="cancelOrder(\'' + safeCoinId + '\')">X</button>';
         }
         html += '<div class="book__row book__row--' + o.side + '">' +
             '<span class="side-tag side-tag--' + o.side + '">' + o.side.toUpperCase() + '</span>' +
