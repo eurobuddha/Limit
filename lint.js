@@ -1,5 +1,5 @@
 /**
- * Limit v0.4.9 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v0.5.0 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
@@ -72,7 +72,7 @@ MDS.init(function(msg) {
 function initApp() {
     // Addresses are hardcoded — skip newscript on startup (avoids pending prompts)
     // Register scripts lazily in background after 3 seconds
-    MDS.log("Limit v0.4.9 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
+    MDS.log("Limit v0.5.0 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
     loadIdentity(function() { finishInit(); });
     setTimeout(registerScripts, 3000);
     MDS.cmd("block", function(res) {
@@ -227,16 +227,13 @@ function createTables(callback) {
 
 function onTablesReady() {
     DB_READY = true;
-    MDS.log("Limit v0.4.9 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
+    MDS.log("Limit v0.5.0 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
     backfillMyTrades(function() {
         loadActivityLog(function() {
             logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
             refreshOrders(); refreshBalances(); loadFills(); loadMyTrades();
-            // Defer write-heavy cleanup operations
-            setTimeout(function() {
-                cleanupZombieTxns();
-                cleanupForeignCoins();
-            }, 10000);
+            // Zombie cleanup deferred, foreign coin cleanup runs after first refresh
+            setTimeout(cleanupZombieTxns, 5000);
         });
     });
 }
@@ -698,6 +695,7 @@ function refreshOrders() {
             PREV_ORDER_COUNT = liveCoins.length;
             parseOrderCoins(liveCoins);
             autoCollectExpired();
+            cleanupForeignCoins();
         });
     }
     if (SCRIPT_ADDR_V1) {
@@ -718,21 +716,32 @@ function exitDex() {
     // Stop future tracking
     MDS.cmd('newscript script:"' + SCRIPT_V1 + '" track:false');
     MDS.cmd('newscript script:"' + SCRIPT_V2 + '" track:false');
-    // Untrack all foreign order coins immediately
-    var count = 0;
-    ORDERS.forEach(function(o) {
-        if (!o.isMine) {
-            MDS.cmd("cointrack enable:false coinid:" + o.coinid);
-            count++;
-        }
+    // Full scan — untrack ALL foreign coins at both addresses
+    var totalCount = 0;
+    function cleanAndShow(addr, callback) {
+        if (!addr) { callback(); return; }
+        MDS.cmd("coins address:" + addr, function(res) {
+            if (!res.status || !res.response) { callback(); return; }
+            res.response.forEach(function(c) {
+                if (!isMyKey(getState(c, 0))) {
+                    MDS.cmd("cointrack enable:false coinid:" + c.coinid);
+                    totalCount++;
+                }
+            });
+            callback();
+        });
+    }
+    cleanAndShow(SCRIPT_ADDR_V1, function() {
+        cleanAndShow(SCRIPT_ADDR_V2, function() {
+            MDS.log("Limit: exit — untracked " + totalCount + " foreign coins, tracking disabled");
+            logActivity("Tracking disabled — untracked " + totalCount + " coin" + (totalCount !== 1 ? "s" : ""), "info");
+            var msgEl = document.getElementById("exitMsg");
+            if (msgEl) msgEl.innerText = totalCount > 0
+                ? "Untracked " + totalCount + " order book coin" + (totalCount > 1 ? "s" : "") + " from your node."
+                : "Coin tracking disabled. No foreign coins found.";
+            document.getElementById("exitModal").style.display = "flex";
+        });
     });
-    MDS.log("Limit: exit — untracked " + count + " foreign coins, tracking disabled");
-    logActivity("Tracking disabled — untracked " + count + " coin" + (count !== 1 ? "s" : ""), "info");
-    var msgEl = document.getElementById("exitMsg");
-    if (msgEl) msgEl.innerText = count > 0
-        ? "Untracked " + count + " order book coin" + (count > 1 ? "s" : "") + " from your node. They will no longer appear as locked in your wallet."
-        : "Coin tracking has been disabled on your node. No foreign coins were found to untrack.";
-    document.getElementById("exitModal").style.display = "flex";
 }
 
 function getState(coin, port) {
