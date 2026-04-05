@@ -1,5 +1,5 @@
 /**
- * Limit v0.5.0 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v0.5.1 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
@@ -32,7 +32,7 @@ var SCRIPT_V2 = 'IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF IF @COINAGE GT
 var USDT_ID = "0x7D39745FBD29049BE29850B55A18BF550E4D442F930F86266E34193D89042A90";
 var SCRIPT_ADDR_V1 = "0x131609A5E510326354647E240F51C53825EFF8CA2B9DE07711EA56055E57672D";
 var SCRIPT_ADDR_V2 = "0xE4D3F27BB044500AF56EF775DAFF3A12187EE79A8460FBBBF321F76A660D7797";
-var SCRIPTS_REGISTERED = false;
+var SCRIPTS_REGISTERED = true;  // scripts registered on init, no lazy loading needed
 var DB_READY = false;
 var MY_ADDR = "";
 var MY_HEX_ADDR = "";
@@ -70,43 +70,18 @@ MDS.init(function(msg) {
 });
 
 function initApp() {
-    // Addresses are hardcoded — skip newscript on startup (avoids pending prompts)
-    // Register scripts lazily in background after 3 seconds
-    MDS.log("Limit v0.5.0 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
+    // Register scripts without tracking — coins address: works without trackall
+    MDS.cmd('newscript script:"' + SCRIPT_V1 + '"');
+    MDS.cmd('newscript script:"' + SCRIPT_V2 + '"');
+    SCRIPTS_REGISTERED = true;
+    MDS.log("Limit v0.5.1 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
     loadIdentity(function() { finishInit(); });
-    setTimeout(registerScripts, 3000);
     MDS.cmd("block", function(res) {
         if (res.status) document.getElementById("blockHeight").innerText = "#" + res.response.block;
     });
     setupUI();
     fetchGeckoPrice();
     setInterval(fetchGeckoPrice, 60000);
-    window.addEventListener('beforeunload', function() {
-        if (SCRIPTS_REGISTERED) {
-            MDS.cmd('newscript script:"' + SCRIPT_V1 + '" track:false');
-            MDS.cmd('newscript script:"' + SCRIPT_V2 + '" track:false');
-        }
-    });
-}
-
-function registerScripts() {
-    if (SCRIPTS_REGISTERED) return;
-    MDS.cmd('newscript script:"' + SCRIPT_V1 + '" trackall:true', function() {
-        MDS.cmd('newscript script:"' + SCRIPT_V2 + '" trackall:true', function() {
-            SCRIPTS_REGISTERED = true;
-            MDS.log("Scripts registered with trackall:true");
-        });
-    });
-}
-
-function ensureRegistered(callback) {
-    if (SCRIPTS_REGISTERED) { callback(); return; }
-    MDS.cmd('newscript script:"' + SCRIPT_V1 + '" trackall:true', function() {
-        MDS.cmd('newscript script:"' + SCRIPT_V2 + '" trackall:true', function() {
-            SCRIPTS_REGISTERED = true;
-            callback();
-        });
-    });
 }
 
 function loadIdentity(callback) {
@@ -227,11 +202,10 @@ function createTables(callback) {
 
 function onTablesReady() {
     DB_READY = true;
-    MDS.log("Limit v0.5.0 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
+    MDS.log("Limit v0.5.1 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
     backfillMyTrades(function() {
         loadActivityLog(function() {
             logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
-            logActivity("Remember: press EXIT when done to clear tracked coins from your wallet", "warn");
             refreshOrders(); refreshBalances(); loadFills(); loadMyTrades();
             setTimeout(cleanupZombieTxns, 5000);
         });
@@ -693,35 +667,8 @@ function refreshOrders() {
 }
 
 function exitDex() {
-    // Stop future tracking
-    MDS.cmd('newscript script:"' + SCRIPT_V1 + '" track:false');
-    MDS.cmd('newscript script:"' + SCRIPT_V2 + '" track:false');
-    // Full scan — untrack ALL foreign coins at both addresses
-    var totalCount = 0;
-    function cleanAndShow(addr, callback) {
-        if (!addr) { callback(); return; }
-        MDS.cmd("coins address:" + addr, function(res) {
-            if (!res.status || !res.response) { callback(); return; }
-            res.response.forEach(function(c) {
-                if (!isMyKey(getState(c, 0))) {
-                    MDS.cmd("cointrack enable:false coinid:" + c.coinid);
-                    totalCount++;
-                }
-            });
-            callback();
-        });
-    }
-    cleanAndShow(SCRIPT_ADDR_V1, function() {
-        cleanAndShow(SCRIPT_ADDR_V2, function() {
-            MDS.log("Limit: exit — untracked " + totalCount + " foreign coins, tracking disabled");
-            logActivity("Tracking disabled — untracked " + totalCount + " coin" + (totalCount !== 1 ? "s" : ""), "info");
-            var msgEl = document.getElementById("exitMsg");
-            if (msgEl) msgEl.innerText = totalCount > 0
-                ? "Untracked " + totalCount + " order book coin" + (totalCount > 1 ? "s" : "") + " from your node."
-                : "Coin tracking disabled. No foreign coins found.";
-            document.getElementById("exitModal").style.display = "flex";
-        });
-    });
+    logActivity("Session closed", "info");
+    document.getElementById("exitModal").style.display = "flex";
 }
 
 function getState(coin, port) {
@@ -856,7 +803,6 @@ function createOrder() {
     var price = document.getElementById("orderPrice").value.trim();
     var amt = document.getElementById("orderAmount").value.trim();
     var statusEl = document.getElementById("createStatus");
-    if (!SCRIPTS_REGISTERED) { ensureRegistered(createOrder); return; }
 
     if (!MY_PUBKEY || !MY_HEX_ADDR) { showErr(statusEl, "Identity not loaded"); return; }
     if (!SCRIPT_ADDR_V2) { showErr(statusEl, "Contract not registered"); return; }
@@ -936,7 +882,6 @@ function createOrder() {
 // -- Cancel Order --
 // Sign with owner key explicitly, then txnpost auto:true (runs txnbasics internally)
 function cancelOrder(coinid) {
-    if (!SCRIPTS_REGISTERED) { ensureRegistered(function() { cancelOrder(coinid); }); return; }
     var order = ORDERS.find(function(o) { return o.coinid === coinid; });
     if (!order) return;
     MDS.notify("Cancelling order...");
@@ -1026,12 +971,10 @@ function cancelOrder(coinid) {
 function refreshSingleOrder(coinid) {
     var order = ORDERS.find(function(o) { return o.coinid === coinid; });
     if (!order) return;
-    if (!SCRIPTS_REGISTERED) { ensureRegistered(function() { refreshSingleOrder(coinid); }); return; }
     refreshNextOrder([order], 0);
 }
 
 function refreshMyOrders() {
-    if (!SCRIPTS_REGISTERED) { ensureRegistered(refreshMyOrders); return; }
     var mine = ORDERS.filter(function(o) { return o.isMine && o.address === SCRIPT_ADDR_V2; });
     if (mine.length === 0) {
         logActivity("No V2 orders to refresh", "info");
@@ -1176,7 +1119,6 @@ function executeFill() {
 // Fill SELL order: I pay USDT (wantAmt), I get Minima
 // VERIFYOUT checks: output[@INPUT] = (wantAddr, wantAmt, wantTok=USDT)
 function fillSellOrder() {
-    if (!SCRIPTS_REGISTERED) { ensureRegistered(fillSellOrder); return; }
     var order = FILL_ORDER;
     var statusEl = document.getElementById("fillStatus");
     var orderAmt = parseFloat(order.amount);  // Minima in order
@@ -1291,7 +1233,6 @@ function fillSellOrder() {
 // Fill BUY order: I send Minima (wantAmt), I get USDT
 // VERIFYOUT checks: output[@INPUT] = (wantAddr, wantAmt, wantTok=0x00)
 function fillBuyOrder() {
-    if (!SCRIPTS_REGISTERED) { ensureRegistered(fillBuyOrder); return; }
     var order = FILL_ORDER;
     var statusEl = document.getElementById("fillStatus");
     var usdtAmt = parseFloat(order.amount);   // USDT in order

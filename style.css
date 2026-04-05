@@ -503,19 +503,6 @@ body {
 }
 .modal__dim { color: var(--dim); font-size: 13px; }
 
-/* Exit Notice */
-.exit-notice {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--accent);
-    background: var(--accent-bg);
-    border: 1px solid var(--accent);
-    border-radius: var(--radius);
-    padding: 6px 12px;
-    margin: 6px 0;
-    text-align: center;
-}
-
 /* Trading History */
 .hist-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 18px; }
 .hist-stat { background: var(--surface); border: 2px solid var(--border); border-radius: var(--radius); padding: 12px 10px; text-align: center; box-shadow: var(--shadow-sm); }

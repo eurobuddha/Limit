@@ -33,8 +33,6 @@
     </header>
 
     <div class="log" id="activityLog"></div>
-    <div class="exit-notice">Press <strong>EXIT</strong> when done to stop tracking order book coins in your wallet.</div>
-
     <!-- Tab Navigation -->
     <nav class="tabs">
         <button class="tab tab--active" data-view="orders">Order Book</button>
@@ -196,7 +194,7 @@
 
     <!-- Footer -->
     <footer class="footer">
-        <span>Limit v0.5.0</span>
+        <span>Limit v0.5.1</span>
         <span class="footer__sep">|</span>
         <span>VERIFYOUT Smart Contract</span>
         <span class="footer__sep">|</span>
@@ -211,16 +209,12 @@
 <!-- Exit Modal -->
 <div id="exitModal" class="modal" style="display:none;">
     <div class="modal__box">
-        <h3 class="modal__title">Tracking Disabled</h3>
-        <p class="modal__text" id="exitMsg">
-            Coin tracking has been disabled on your node.
-        </p>
+        <h3 class="modal__title">Session Closed</h3>
         <p class="modal__text">
-            Your own orders are unaffected.
+            Your orders remain active on-chain.
         </p>
         <p class="modal__text modal__dim">
-            Tracking resumes next time you open the DEX.
-            The order book may take a block to repopulate.
+            Reopen the DEX anytime to view the order book and trade.
         </p>
         <button class="btn btn--ghost btn--full" onclick="document.getElementById('exitModal').style.display='none'">OK</button>
     </div>
