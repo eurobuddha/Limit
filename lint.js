@@ -232,8 +232,11 @@ function onTablesReady() {
         loadActivityLog(function() {
             logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
             refreshOrders(); refreshBalances(); loadFills(); loadMyTrades();
-            // Zombie cleanup deferred, foreign coin cleanup runs after first refresh
-            setTimeout(cleanupZombieTxns, 5000);
+            // Deferred cleanup — runs once after startup
+            setTimeout(function() {
+                cleanupZombieTxns();
+                cleanupForeignCoins();
+            }, 5000);
         });
     });
 }
@@ -695,7 +698,6 @@ function refreshOrders() {
             PREV_ORDER_COUNT = liveCoins.length;
             parseOrderCoins(liveCoins);
             autoCollectExpired();
-            cleanupForeignCoins();
         });
     }
     if (SCRIPT_ADDR_V1) {
