@@ -116,6 +116,8 @@
             <div class="book__empty">No orders placed</div>
         </div>
         <div id="cancelStatus" class="status"></div>
+        <button class="btn btn--ghost btn--full" onclick="refreshMyOrders()" style="margin-top:8px;">Refresh My Orders (Reset Expiry)</button>
+        <div id="refreshStatus" class="status"></div>
 
         <div class="bridge-banner">
             <span class="bridge-banner__icon">↗</span>
@@ -193,7 +195,7 @@
 
     <!-- Footer -->
     <footer class="footer">
-        <span>Limit v0.4.8</span>
+        <span>Limit v0.4.9</span>
         <span class="footer__sep">|</span>
         <span>VERIFYOUT Smart Contract</span>
         <span class="footer__sep">|</span>

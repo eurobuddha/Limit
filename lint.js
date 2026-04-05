@@ -1,5 +1,5 @@
 /**
- * Limit v0.4.8 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v0.4.9 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
@@ -47,6 +47,7 @@ var PENDING_TXID = null;       // txid awaiting pending approval
 var PENDING_CALLBACK = null;   // callback to run after fill completes
 var CANCEL_STATUS = {};        // coinid → "pending"|"confirming"|"confirmed"
 var PREV_ORDER_COUNT = -1;     // track order book changes
+var CURRENT_BLOCK = 0;         // latest block height for age display
 var PREV_MINIMA_BAL = null;    // track balance changes
 var PREV_USDT_BAL = null;
 var PENDING_FILL_COINID = null; // coinid of order being filled — watch for removal
@@ -71,7 +72,7 @@ MDS.init(function(msg) {
 function initApp() {
     // Addresses are hardcoded — skip newscript on startup (avoids pending prompts)
     // Register scripts lazily in background after 3 seconds
-    MDS.log("Limit v0.4.8 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
+    MDS.log("Limit v0.4.9 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
     loadIdentity(function() { finishInit(); });
     setTimeout(registerScripts, 3000);
     MDS.cmd("block", function(res) {
@@ -226,7 +227,7 @@ function createTables(callback) {
 
 function onTablesReady() {
     DB_READY = true;
-    MDS.log("Limit v0.4.8 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
+    MDS.log("Limit v0.4.9 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
     backfillMyTrades(function() {
         loadActivityLog(function() {
             logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
@@ -263,7 +264,7 @@ function cleanupZombieTxns() {
     MDS.cmd("txnlist", function(res) {
         if (!res.status || !res.response) return;
         res.response.forEach(function(tx) {
-            if (tx.id && (tx.id.indexOf("fill_") === 0 || tx.id.indexOf("cancel_") === 0 || tx.id.indexOf("collect_") === 0)) {
+            if (tx.id && (tx.id.indexOf("fill_") === 0 || tx.id.indexOf("cancel_") === 0 || tx.id.indexOf("collect_") === 0 || tx.id.indexOf("refresh_") === 0)) {
                 MDS.cmd("txndelete id:" + tx.id);
                 logActivity("Cleaned up stuck txn: " + tx.id, "warn");
             }
@@ -650,6 +651,7 @@ function refreshOrders() {
         // Get current block to filter expired V2 orders
         MDS.cmd("block", function(bres) {
             var curBlock = (bres && bres.status) ? parseInt(bres.response.block) : 0;
+            CURRENT_BLOCK = curBlock;
             // Separate live orders from expired V2 orders
             var liveCoins = [];
             EXPIRED_ORDERS = [];
@@ -683,9 +685,10 @@ function refreshOrders() {
             if (PENDING_CREATE && PREV_ORDER_COUNT >= 0 && liveCoins.length > PREV_ORDER_COUNT) {
                 PENDING_CREATE = false;
                 logActivity("Order confirmed on-chain!", "ok");
+                logActivity("Order expires in ~1500 blocks (~23h) unless refreshed", "warn");
                 logActivity("Waiting for balance update...", "info");
                 var csEl = document.getElementById("createStatus");
-                if (csEl) { csEl.className = "status status--ok"; csEl.innerText = "Order confirmed on-chain!"; setTimeout(function() { csEl.innerText = ""; csEl.className = "status"; }, 5000); }
+                if (csEl) { csEl.className = "status status--ok"; csEl.innerText = "Order confirmed — expires in ~23h unless refreshed"; setTimeout(function() { csEl.innerText = ""; csEl.className = "status"; }, 8000); }
             }
             // Log order book changes
             if (PREV_ORDER_COUNT >= 0 && liveCoins.length !== PREV_ORDER_COUNT) {
@@ -770,7 +773,8 @@ function parseOrderCoins(coins) {
             orderId: oid,
             side: side,
             sideNum: sideNum,
-            isMine: isMyKey(ownerkey)
+            isMine: isMyKey(ownerkey),
+            created: parseInt(coin.created) || 0
         });
     });
     // Detect maker fills: my orders that disappeared (not cancelled, not collected)
@@ -826,6 +830,16 @@ function renderMyOrders() {
         var usdtTotal = isBuy ? parseFloat(o.amount).toFixed(4) : (parseFloat(o.amount) * o.price).toFixed(4);
         var safeCoinId = o.coinid.replace(/[^a-fA-F0-9x]/g, '');
         var cancelState = CANCEL_STATUS[o.coinid];
+        // Calculate age for V2 orders
+        var age = (o.address === SCRIPT_ADDR_V2 && CURRENT_BLOCK > 0 && o.created > 0) ? CURRENT_BLOCK - o.created : -1;
+        var ageHtml = "";
+        if (age >= 0) {
+            var pct = Math.min(100, Math.round(age / 1500 * 100));
+            var ageColor = pct > 90 ? "var(--red)" : pct > 70 ? "var(--accent)" : "var(--dim)";
+            var remaining = Math.max(0, 1500 - age);
+            var hoursLeft = (remaining * 50 / 3600).toFixed(1);
+            ageHtml = '<span style="font-size:10px;color:' + ageColor + ';" title="' + age + '/' + '1500 blocks">' + hoursLeft + 'h left</span>';
+        }
         var actionHtml;
         if (cancelState === "pending") {
             actionHtml = '<span class="cancel-status cancel-status--pending">PENDING</span>';
@@ -834,12 +848,14 @@ function renderMyOrders() {
         } else if (cancelState === "confirmed") {
             actionHtml = '<span class="cancel-status cancel-status--confirmed">CANCELLED</span>';
         } else {
-            actionHtml = '<button class="btn btn--cancel btn--sm" onclick="cancelOrder(\'' + safeCoinId + '\')">X</button>';
+            var refreshBtn = (o.address === SCRIPT_ADDR_V2) ? '<button class="btn btn--ghost btn--sm" onclick="refreshSingleOrder(\'' + safeCoinId + '\')" title="Reset expiry clock" style="font-size:10px;padding:2px 5px;">↻</button>' : '';
+            actionHtml = refreshBtn + '<button class="btn btn--cancel btn--sm" onclick="cancelOrder(\'' + safeCoinId + '\')">X</button>';
         }
         html += '<div class="book__row book__row--' + o.side + '">' +
             '<span class="side-tag side-tag--' + o.side + '">' + o.side.toUpperCase() + '</span>' +
             '<span class="price--' + o.side + '">' + fmtPrice(o.price) + '</span>' +
             '<span>' + minimaAmt + '</span><span>' + usdtTotal + '</span>' +
+            '<span>' + ageHtml + '</span>' +
             '<span>' + actionHtml + '</span></div>';
     });
     el.innerHTML = html;
@@ -1012,6 +1028,109 @@ function cancelOrder(coinid) {
                         }
                     });
                 });
+            });
+        });
+    });
+}
+
+// -- Refresh Orders (reset expiry clock) --
+function refreshSingleOrder(coinid) {
+    var order = ORDERS.find(function(o) { return o.coinid === coinid; });
+    if (!order) return;
+    if (!SCRIPTS_REGISTERED) { ensureRegistered(function() { refreshSingleOrder(coinid); }); return; }
+    refreshNextOrder([order], 0);
+}
+
+function refreshMyOrders() {
+    if (!SCRIPTS_REGISTERED) { ensureRegistered(refreshMyOrders); return; }
+    var mine = ORDERS.filter(function(o) { return o.isMine && o.address === SCRIPT_ADDR_V2; });
+    if (mine.length === 0) {
+        logActivity("No V2 orders to refresh", "info");
+        var rsEl = document.getElementById("refreshStatus");
+        if (rsEl) { rsEl.className = "status status--warn"; rsEl.innerText = "No orders to refresh"; setTimeout(function() { rsEl.innerText = ""; rsEl.className = "status"; }, 3000); }
+        return;
+    }
+    logActivity("Refreshing " + mine.length + " order(s)...", "info");
+    var rsEl = document.getElementById("refreshStatus");
+    if (rsEl) { rsEl.className = "status status--warn"; rsEl.innerText = "Refreshing " + mine.length + " order(s)..."; }
+    refreshNextOrder(mine, 0);
+}
+
+function refreshNextOrder(orders, idx) {
+    if (idx >= orders.length) {
+        logActivity("All " + orders.length + " order(s) refreshed — expiry clocks reset", "ok");
+        var rsEl = document.getElementById("refreshStatus");
+        if (rsEl) { rsEl.className = "status status--ok"; rsEl.innerText = "All orders refreshed!"; setTimeout(function() { rsEl.innerText = ""; rsEl.className = "status"; }, 5000); }
+        refreshOrders(); refreshBalances();
+        return;
+    }
+    var o = orders[idx];
+    var txid = "refresh_" + Date.now();
+    logActivity("Refreshing " + o.side.toUpperCase() + " " + parseFloat(o.amount).toFixed(4) + " @ " + fmtPrice(o.price) + "...", "info");
+
+    MDS.cmd("txncreate id:" + txid, function(r0) {
+        if (!r0.status) { logActivity("Refresh failed — txncreate", "err"); refreshNextOrder(orders, idx + 1); return; }
+        MDS.cmd("txninput id:" + txid + " coinid:" + o.coinid, function(r1) {
+            if (!r1.status) { logActivity("Refresh failed — txninput", "err"); MDS.cmd("txndelete id:" + txid); refreshNextOrder(orders, idx + 1); return; }
+            // Output back to same script address with same amount
+            var outCmd = "txnoutput id:" + txid + " amount:" + o.amount + " address:" + SCRIPT_ADDR_V2 + " storestate:true";
+            if (o.tokenid !== "0x00") outCmd += " tokenid:" + o.tokenid;
+            MDS.cmd(outCmd, function(r2) {
+                if (!r2.status) { logActivity("Refresh failed — txnoutput", "err"); MDS.cmd("txndelete id:" + txid); refreshNextOrder(orders, idx + 1); return; }
+                // Set state ports 0-6 via txnstate
+                var ports = [
+                    { port: 0, value: o.ownerkey },
+                    { port: 1, value: o.wantAddr },
+                    { port: 2, value: String(o.wantAmt) },
+                    { port: 3, value: o.wantTok },
+                    { port: 4, value: o.orderId },
+                    { port: 5, value: o.sideNum },
+                    { port: 6, value: String(o.price) }
+                ];
+                function setNextState(si) {
+                    if (si >= ports.length) {
+                        // All state set — sign with owner key and post
+                        MDS.cmd("txnsign id:" + txid + " publickey:" + o.ownerkey, function(sr) {
+                            if (isPending(sr)) {
+                                logActivity("Refresh pending — approve in Pending Actions", "warn");
+                                showPending(null, null, txid, function(ok) {
+                                    if (ok) {
+                                        logActivity("Refreshed " + o.side.toUpperCase() + " @ " + fmtPrice(o.price) + " — clock reset", "ok");
+                                    }
+                                    refreshNextOrder(orders, idx + 1);
+                                });
+                                return;
+                            }
+                            if (sr && !sr.status) {
+                                var serr = sr.error || "";
+                                if (serr.indexOf("LOCKED") >= 0) {
+                                    logActivity("KEYS LOCKED — unlock your vault to refresh orders", "err");
+                                } else {
+                                    logActivity("Refresh sign failed — " + serr, "err");
+                                }
+                                MDS.cmd("txndelete id:" + txid);
+                                refreshNextOrder(orders, idx + 1);
+                                return;
+                            }
+                            MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(pr) {
+                                var rp = Array.isArray(pr) ? pr[pr.length - 1] : pr;
+                                if (rp && rp.status) {
+                                    logActivity("Refreshed " + o.side.toUpperCase() + " @ " + fmtPrice(o.price) + " — clock reset", "ok");
+                                } else {
+                                    logActivity("Refresh post failed — " + (rp ? rp.error || "unknown" : "no response"), "err");
+                                    MDS.cmd("txndelete id:" + txid);
+                                }
+                                refreshNextOrder(orders, idx + 1);
+                            });
+                        });
+                        return;
+                    }
+                    MDS.cmd("txnstate id:" + txid + " port:" + ports[si].port + " value:" + ports[si].value, function(ss) {
+                        if (!ss.status) { logActivity("Refresh failed — txnstate port " + ports[si].port, "err"); MDS.cmd("txndelete id:" + txid); refreshNextOrder(orders, idx + 1); return; }
+                        setNextState(si + 1);
+                    });
+                }
+                setNextState(0);
             });
         });
     });
