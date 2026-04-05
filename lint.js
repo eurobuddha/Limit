@@ -1066,6 +1066,7 @@ function refreshNextOrder(orders, idx) {
     }
     var o = orders[idx];
     var txid = "refresh_" + Date.now();
+    CANCEL_STATUS[o.coinid] = "refreshing";
     logActivity("Refreshing " + o.side.toUpperCase() + " " + parseFloat(o.amount).toFixed(4) + " @ " + fmtPrice(o.price) + "...", "info");
 
     MDS.cmd("txncreate id:" + txid, function(r0) {
