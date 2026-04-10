@@ -1,5 +1,5 @@
 /**
- * Limit v0.5.2 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v0.5.3 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
@@ -72,7 +72,7 @@ function initApp() {
     // Register scripts without tracking — coins address: works without trackall
     MDS.cmd('newscript script:"' + SCRIPT_V1 + '"');
     MDS.cmd('newscript script:"' + SCRIPT_V2 + '"');
-    MDS.log("Limit v0.5.2 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
+    MDS.log("Limit v0.5.3 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
     loadIdentity(function() { finishInit(); });
     MDS.cmd("block", function(res) {
         if (res.status) document.getElementById("blockHeight").innerText = "#" + res.response.block;
@@ -200,7 +200,7 @@ function createTables(callback) {
 
 function onTablesReady() {
     DB_READY = true;
-    MDS.log("Limit v0.5.2 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
+    MDS.log("Limit v0.5.3 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
     backfillMyTrades(function() {
         loadActivityLog(function() {
             logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
@@ -229,12 +229,23 @@ function autoCollectExpired() {
         // Skip if already being collected
         if (CANCEL_STATUS[c.coinid]) return;
         var ownerAddr = "";
+        var ownerKey = "";
+        var orderId = "";
+        var sideNum = "";
+        var price = "0";
         var amt = c.tokenamount || c.amount;
         for (var i = 0; i < (c.state || []).length; i++) {
-            if (c.state[i].port === 1) ownerAddr = c.state[i].data;
+            var s = c.state[i];
+            if (s.port === 0) ownerKey = s.data;
+            if (s.port === 1) ownerAddr = s.data;
+            if (s.port === 4) orderId = s.data;
+            if (s.port === 5) sideNum = s.data;
+            if (s.port === 6) price = s.data;
         }
         if (!ownerAddr) return;
-        logActivity("Collecting expired order — " + parseFloat(amt).toFixed(4) + " back to owner", "warn");
+        var side = sideNum === "0" ? "buy" : "sell";
+        var isMine = isMyKey(ownerKey);
+        logActivity("Collecting expired " + (isMine ? "your " : "") + side.toUpperCase() + " order — " + parseFloat(amt).toFixed(4) + " @ " + price + " back to owner", "warn");
         CANCEL_STATUS[c.coinid] = "collecting";
         var txid = "collect_" + Date.now() + "_" + Math.random().toString(36).substring(2, 6);
         MDS.cmd("txncreate id:" + txid, function(r0) {
@@ -249,7 +260,11 @@ function autoCollectExpired() {
                     MDS.cmd("txnbasics id:" + txid + ";txnpost id:" + txid, function(pr) {
                         var rp = Array.isArray(pr) ? pr[pr.length - 1] : pr;
                         if (rp && rp.status) {
-                            logActivity("Expired order collected — funds returning to owner", "ok");
+                            logActivity("Expired order collected — " + parseFloat(amt).toFixed(4) + " returning to owner", "ok");
+                            if (isMine) {
+                                recordMyTrade(orderId, "expired", side, price, amt);
+                                logActivity("Recorded expiry in trade history", "info");
+                            }
                         } else {
                             logActivity("Collect failed — " + (rp ? rp.error || "unknown" : "no response"), "err");
                             MDS.cmd("txndelete id:" + txid);
@@ -300,12 +315,14 @@ function renderMyTrades() {
         var d = new Date(parseInt(t.TIMESTAMP));
         var date = ('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2)+' '+
                    ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
-        var sideClass = t.SIDE === "buy" ? "side-tag--buy" : "side-tag--sell";
+        var isExpired = t.ROLE === "expired";
+        var sideClass = isExpired ? "" : (t.SIDE === "buy" ? "side-tag--buy" : "side-tag--sell");
+        var sideLabel = isExpired ? "EXPIRED" : t.SIDE.toUpperCase();
         var gp = parseFloat(t.GECKO_PRICE);
         var gpStr = gp > 0 ? fmtPrice(gp) : "—";
-        html += '<div class="mytrades__row">' +
+        html += '<div class="mytrades__row"' + (isExpired ? ' style="opacity:0.6"' : '') + '>' +
             '<span>' + date + '</span>' +
-            '<span class="side-tag ' + sideClass + '">' + t.SIDE.toUpperCase() + '</span>' +
+            '<span class="side-tag ' + sideClass + '" ' + (isExpired ? 'style="color:var(--dim)"' : '') + '>' + sideLabel + '</span>' +
             '<span>' + parseFloat(t.AMOUNT).toFixed(4) + '</span>' +
             '<span class="price--' + t.SIDE + '">' + fmtPrice(parseFloat(t.PRICE)) + '</span>' +
             '<span>' + parseFloat(t.TOTAL).toFixed(4) + '</span>' +
@@ -329,6 +346,7 @@ function renderTradeStats() {
     }
     var totalVol = 0, weightedPrice = 0, totalAmt = 0, pnl = 0;
     MY_TRADES.forEach(function(t) {
+        if (t.ROLE === "expired") return; // Expired orders are not trades — exclude from stats
         var total = parseFloat(t.TOTAL);
         var price = parseFloat(t.PRICE);
         var amount = parseFloat(t.AMOUNT);
