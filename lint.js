@@ -1,5 +1,5 @@
 /**
- * Limit v0.5.1 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v0.5.2 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
@@ -72,7 +72,7 @@ function initApp() {
     // Register scripts without tracking — coins address: works without trackall
     MDS.cmd('newscript script:"' + SCRIPT_V1 + '"');
     MDS.cmd('newscript script:"' + SCRIPT_V2 + '"');
-    MDS.log("Limit v0.5.1 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
+    MDS.log("Limit v0.5.2 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
     loadIdentity(function() { finishInit(); });
     MDS.cmd("block", function(res) {
         if (res.status) document.getElementById("blockHeight").innerText = "#" + res.response.block;
@@ -200,7 +200,7 @@ function createTables(callback) {
 
 function onTablesReady() {
     DB_READY = true;
-    MDS.log("Limit v0.5.1 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
+    MDS.log("Limit v0.5.2 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
     backfillMyTrades(function() {
         loadActivityLog(function() {
             logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
@@ -733,8 +733,17 @@ function parseOrderCoins(coins) {
 function renderOrderBook() {
     var el = document.getElementById("orderList");
     if (ORDERS.length === 0) { el.innerHTML = '<div class="book__empty">No open orders</div>'; return; }
-    var sells = ORDERS.filter(function(o) { return o.side === "sell"; }).sort(function(a, b) { return b.price - a.price; });
-    var buys = ORDERS.filter(function(o) { return o.side === "buy"; }).sort(function(a, b) { return b.price - a.price; });
+    // Filter out dust orders (tiny amounts that clutter the book)
+    var minMinima = 0.01;
+    var sells = ORDERS.filter(function(o) {
+        if (o.side !== "sell") return false;
+        return parseFloat(o.amount) >= minMinima;
+    }).sort(function(a, b) { return b.price - a.price; });
+    var buys = ORDERS.filter(function(o) {
+        if (o.side !== "buy") return false;
+        var minimaAmt = parseFloat(o.amount) / o.price;
+        return minimaAmt >= minMinima;
+    }).sort(function(a, b) { return b.price - a.price; });
     var all = sells.concat(buys);
     var html = "";
     all.forEach(function(o) {
@@ -805,6 +814,7 @@ function createOrder() {
     if (!MY_PUBKEY || !MY_HEX_ADDR) { showErr(statusEl, "Identity not loaded"); return; }
     if (!SCRIPT_ADDR_V2) { showErr(statusEl, "Contract not registered"); return; }
     if (!amt || !price || parseFloat(price) <= 0 || parseFloat(amt) <= 0) { showErr(statusEl, "Valid price and amount required"); return; }
+    if (parseFloat(amt) < 0.01) { showErr(statusEl, "Amount too low — minimum 0.01 MINIMA"); logActivity("Order rejected — amount too low", "err"); return; }
 
     statusEl.className = "status"; statusEl.innerText = "Creating " + ORDER_SIDE + " order...";
     logActivity("Creating " + ORDER_SIDE.toUpperCase() + " order — " + amt + " MINIMA @ " + price + " USDT...", "info");
