@@ -1,5 +1,5 @@
 /**
- * Limit v0.5.3 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v0.5.4 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
@@ -72,7 +72,7 @@ function initApp() {
     // Register scripts without tracking — coins address: works without trackall
     MDS.cmd('newscript script:"' + SCRIPT_V1 + '"');
     MDS.cmd('newscript script:"' + SCRIPT_V2 + '"');
-    MDS.log("Limit v0.5.3 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
+    MDS.log("Limit v0.5.4 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
     loadIdentity(function() { finishInit(); });
     MDS.cmd("block", function(res) {
         if (res.status) document.getElementById("blockHeight").innerText = "#" + res.response.block;
@@ -200,7 +200,7 @@ function createTables(callback) {
 
 function onTablesReady() {
     DB_READY = true;
-    MDS.log("Limit v0.5.3 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
+    MDS.log("Limit v0.5.4 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
     backfillMyTrades(function() {
         loadActivityLog(function() {
             logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
@@ -666,6 +666,7 @@ function refreshOrders() {
             PREV_ORDER_COUNT = liveCoins.length;
             parseOrderCoins(liveCoins);
             autoCollectExpired();
+            autoRefreshOrders(curBlock);
         });
     }
     if (SCRIPT_ADDR_V1) {
@@ -1093,6 +1094,23 @@ function refreshNextOrder(orders, idx) {
             });
         });
     });
+}
+
+// -- Auto-Refresh Orders (at 1400 blocks, before 1500 expiry) --
+function autoRefreshOrders(curBlock) {
+    if (!curBlock || curBlock === 0) return;
+    var stale = ORDERS.filter(function(o) {
+        if (!o.isMine || o.address !== SCRIPT_ADDR_V2 || !o.created) return false;
+        var age = curBlock - o.created;
+        return age > 1400 && age <= 1500;
+    });
+    if (stale.length === 0) return;
+    // Don't auto-refresh if any are already being refreshed
+    for (var i = 0; i < stale.length; i++) {
+        if (CANCEL_STATUS[stale[i].coinid]) return;
+    }
+    logActivity("Auto-refreshing " + stale.length + " order(s) nearing expiry...", "warn");
+    refreshNextOrder(stale, 0);
 }
 
 // -- Fill Order --
