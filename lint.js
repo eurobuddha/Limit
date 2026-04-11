@@ -1,15 +1,20 @@
 /**
- * Limit v0.5.4 — On-Chain Limit Order DEX for MINIMA/USDT
+ * Limit v1.0.0 — On-Chain Limit Order DEX for MINIMA/USDT
  * Uses official Minima VERIFYOUT exchange contract pattern
  * FULL FILL ONLY — no partial fills
  *
  * KISS VM Smart Contracts:
- *   V1 (legacy, no expiry):
+ *   V1 (legacy, no expiry, UNSAFE cancel path):
  *     IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF
  *     ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE)
  *     RETURN TRUE
- *   V2 (current, 1500 block expiry):
+ *   V2 (legacy, 1500 block expiry, UNSAFE cancel path):
  *     IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF
+ *     IF @COINAGE GT 1500 THEN ASSERT VERIFYOUT(@INPUT PREVSTATE(1) @AMOUNT @TOKENID FALSE) RETURN TRUE ENDIF
+ *     ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE)
+ *     RETURN TRUE
+ *   V3 (current, 1500 block expiry, ALL paths secured with VERIFYOUT):
+ *     IF SIGNEDBY(PREVSTATE(0)) THEN ASSERT VERIFYOUT(@INPUT PREVSTATE(1) @AMOUNT @TOKENID FALSE) RETURN TRUE ENDIF
  *     IF @COINAGE GT 1500 THEN ASSERT VERIFYOUT(@INPUT PREVSTATE(1) @AMOUNT @TOKENID FALSE) RETURN TRUE ENDIF
  *     ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE)
  *     RETURN TRUE
@@ -29,9 +34,11 @@
 
 var SCRIPT_V1 = 'IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE) RETURN TRUE';
 var SCRIPT_V2 = 'IF SIGNEDBY(PREVSTATE(0)) THEN RETURN TRUE ENDIF IF @COINAGE GT 1500 THEN ASSERT VERIFYOUT(@INPUT PREVSTATE(1) @AMOUNT @TOKENID FALSE) RETURN TRUE ENDIF ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE) RETURN TRUE';
+var SCRIPT_V3 = 'IF SIGNEDBY(PREVSTATE(0)) THEN ASSERT VERIFYOUT(@INPUT PREVSTATE(1) @AMOUNT @TOKENID FALSE) RETURN TRUE ENDIF IF @COINAGE GT 1500 THEN ASSERT VERIFYOUT(@INPUT PREVSTATE(1) @AMOUNT @TOKENID FALSE) RETURN TRUE ENDIF ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE) RETURN TRUE';
 var USDT_ID = "0x7D39745FBD29049BE29850B55A18BF550E4D442F930F86266E34193D89042A90";
 var SCRIPT_ADDR_V1 = "0x131609A5E510326354647E240F51C53825EFF8CA2B9DE07711EA56055E57672D";
 var SCRIPT_ADDR_V2 = "0xE4D3F27BB044500AF56EF775DAFF3A12187EE79A8460FBBBF321F76A660D7797";
+var SCRIPT_ADDR_V3 = "0xE0325CC04B1BA1FC630D5E2B157976D01F76507D2049BD9D7D8029A318782BC7";
 var DB_READY = false;
 var MY_ADDR = "";
 var MY_HEX_ADDR = "";
@@ -72,7 +79,8 @@ function initApp() {
     // Register scripts without tracking — coins address: works without trackall
     MDS.cmd('newscript script:"' + SCRIPT_V1 + '"');
     MDS.cmd('newscript script:"' + SCRIPT_V2 + '"');
-    MDS.log("Limit v0.5.4 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2);
+    MDS.cmd('newscript script:"' + SCRIPT_V3 + '"');
+    MDS.log("Limit v1.0.0 contracts: V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " V3=" + SCRIPT_ADDR_V3);
     loadIdentity(function() { finishInit(); });
     MDS.cmd("block", function(res) {
         if (res.status) document.getElementById("blockHeight").innerText = "#" + res.response.block;
@@ -200,7 +208,7 @@ function createTables(callback) {
 
 function onTablesReady() {
     DB_READY = true;
-    MDS.log("Limit v0.5.4 ready. V1=" + SCRIPT_ADDR_V1 + " V2=" + SCRIPT_ADDR_V2 + " Keys=" + Object.keys(MY_KEYS).length);
+    MDS.log("Limit v1.0.0 ready. V3=" + SCRIPT_ADDR_V3 + " Keys=" + Object.keys(MY_KEYS).length);
     backfillMyTrades(function() {
         loadActivityLog(function() {
             logActivity("DEX ready — " + Object.keys(MY_KEYS).length + " keys loaded", "info");
@@ -610,9 +618,9 @@ function updateSummary() {
 
 // -- Order Book --
 function refreshOrders() {
-    if (!SCRIPT_ADDR_V1 && !SCRIPT_ADDR_V2) return;
+    if (!SCRIPT_ADDR_V1 && !SCRIPT_ADDR_V2 && !SCRIPT_ADDR_V3) return;
     var allCoins = [];
-    var done = 0, total = (SCRIPT_ADDR_V1 ? 1 : 0) + (SCRIPT_ADDR_V2 ? 1 : 0);
+    var done = 0, total = (SCRIPT_ADDR_V1 ? 1 : 0) + (SCRIPT_ADDR_V2 ? 1 : 0) + (SCRIPT_ADDR_V3 ? 1 : 0);
     function onAllCoins() {
         done++;
         if (done < total) return;
@@ -624,7 +632,7 @@ function refreshOrders() {
             var liveCoins = [];
             EXPIRED_ORDERS = [];
             allCoins.forEach(function(c) {
-                if (c.address === SCRIPT_ADDR_V2 && curBlock > 0) {
+                if ((c.address === SCRIPT_ADDR_V2 || c.address === SCRIPT_ADDR_V3) && curBlock > 0) {
                     var age = curBlock - (parseInt(c.created) || 0);
                     if (age > 1500) {
                         EXPIRED_ORDERS.push(c);
@@ -677,6 +685,12 @@ function refreshOrders() {
     }
     if (SCRIPT_ADDR_V2) {
         MDS.cmd("coins address:" + SCRIPT_ADDR_V2, function(res) {
+            if (res.status && res.response) allCoins = allCoins.concat(res.response);
+            onAllCoins();
+        });
+    }
+    if (SCRIPT_ADDR_V3) {
+        MDS.cmd("coins address:" + SCRIPT_ADDR_V3, function(res) {
             if (res.status && res.response) allCoins = allCoins.concat(res.response);
             onAllCoins();
         });
@@ -793,7 +807,7 @@ function renderMyOrders() {
         var safeCoinId = o.coinid.replace(/[^a-fA-F0-9x]/g, '');
         var cancelState = CANCEL_STATUS[o.coinid];
         // Calculate age for V2 orders
-        var age = (o.address === SCRIPT_ADDR_V2 && CURRENT_BLOCK > 0 && o.created > 0) ? CURRENT_BLOCK - o.created : -1;
+        var age = ((o.address === SCRIPT_ADDR_V2 || o.address === SCRIPT_ADDR_V3) && CURRENT_BLOCK > 0 && o.created > 0) ? CURRENT_BLOCK - o.created : -1;
         var ageHtml = "";
         if (age >= 0) {
             var pct = Math.min(100, Math.round(age / 1500 * 100));
@@ -831,7 +845,7 @@ function createOrder() {
     var statusEl = document.getElementById("createStatus");
 
     if (!MY_PUBKEY || !MY_HEX_ADDR) { showErr(statusEl, "Identity not loaded"); return; }
-    if (!SCRIPT_ADDR_V2) { showErr(statusEl, "Contract not registered"); return; }
+    if (!SCRIPT_ADDR_V3) { showErr(statusEl, "Contract not registered"); return; }
     if (!amt || !price || parseFloat(price) <= 0 || parseFloat(amt) <= 0) { showErr(statusEl, "Valid price and amount required"); return; }
     if (parseFloat(amt) < 0.01) { showErr(statusEl, "Amount too low — minimum 0.01 MINIMA"); logActivity("Order rejected — amount too low", "err"); return; }
 
@@ -877,7 +891,7 @@ function createOrder() {
 
     var stateObj = '{"0":"' + MY_PUBKEY + '","1":"' + MY_HEX_ADDR + '","2":"' + wantAmt + '","3":"' + wantTok + '","4":"' + orderId + '","5":"' + sideNum + '","6":"' + price + '"}';
 
-    var cmd = "send amount:" + lockAmt + " address:" + SCRIPT_ADDR_V2 + " state:" + stateObj;
+    var cmd = "send amount:" + lockAmt + " address:" + SCRIPT_ADDR_V3 + " state:" + stateObj;
     if (lockTok) cmd += " tokenid:" + lockTok;
 
     logActivity("Sending " + lockAmt + " " + unit + " to contract...", "info");
@@ -1002,7 +1016,7 @@ function refreshSingleOrder(coinid) {
 }
 
 function refreshMyOrders() {
-    var mine = ORDERS.filter(function(o) { return o.isMine && o.address === SCRIPT_ADDR_V2; });
+    var mine = ORDERS.filter(function(o) { return o.isMine && (o.address === SCRIPT_ADDR_V2 || o.address === SCRIPT_ADDR_V3); });
     if (mine.length === 0) {
         logActivity("No V2 orders to refresh", "info");
         var rsEl = document.getElementById("refreshStatus");
@@ -1033,7 +1047,7 @@ function refreshNextOrder(orders, idx) {
         MDS.cmd("txninput id:" + txid + " coinid:" + o.coinid, function(r1) {
             if (!r1.status) { logActivity("Refresh failed — txninput", "err"); MDS.cmd("txndelete id:" + txid); refreshNextOrder(orders, idx + 1); return; }
             // Output back to same script address with same amount
-            var outCmd = "txnoutput id:" + txid + " amount:" + o.amount + " address:" + SCRIPT_ADDR_V2 + " storestate:true";
+            var outCmd = "txnoutput id:" + txid + " amount:" + o.amount + " address:" + SCRIPT_ADDR_V3 + " storestate:true";
             if (o.tokenid !== "0x00") outCmd += " tokenid:" + o.tokenid;
             MDS.cmd(outCmd, function(r2) {
                 if (!r2.status) { logActivity("Refresh failed — txnoutput", "err"); MDS.cmd("txndelete id:" + txid); refreshNextOrder(orders, idx + 1); return; }
@@ -1100,7 +1114,7 @@ function refreshNextOrder(orders, idx) {
 function autoRefreshOrders(curBlock) {
     if (!curBlock || curBlock === 0) return;
     var stale = ORDERS.filter(function(o) {
-        if (!o.isMine || o.address !== SCRIPT_ADDR_V2 || !o.created) return false;
+        if (!o.isMine || (o.address !== SCRIPT_ADDR_V2 && o.address !== SCRIPT_ADDR_V3) || !o.created) return false;
         var age = curBlock - o.created;
         return age > 1400 && age <= 1500;
     });
