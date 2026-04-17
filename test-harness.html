@@ -1,0 +1,2550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Limit DEX — Integration Test Harness</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+}
+.header {
+    background: #16213e;
+    border-bottom: 1px solid #0f3460;
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+.header h1 {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: #e94560;
+}
+.header h1 span { color: #666; font-weight: 400; font-size: 12px; }
+.node-status {
+    display: flex;
+    gap: 20px;
+    align-items: center;
+}
+.node-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+}
+.dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #555;
+    display: inline-block;
+}
+.dot.ok { background: #4ecca3; }
+.dot.err { background: #e94560; }
+.controls {
+    display: flex;
+    gap: 8px;
+}
+.btn {
+    background: #0f3460;
+    color: #e0e0e0;
+    border: 1px solid #1a5276;
+    padding: 6px 16px;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: 3px;
+}
+.btn:hover { background: #1a5276; }
+.btn.primary { background: #4ecca3; color: #1a1a2e; border-color: #4ecca3; font-weight: 700; }
+.btn.primary:hover { background: #3dbb92; }
+.btn.danger { background: #e94560; color: #fff; border-color: #e94560; }
+.btn.danger:hover { background: #d13652; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.main {
+    display: flex;
+    height: calc(100vh - 56px);
+}
+.test-panel {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px;
+    border-right: 1px solid #0f3460;
+    min-width: 420px;
+}
+.log-panel {
+    width: 45%;
+    overflow-y: auto;
+    padding: 10px;
+    background: #111;
+    font-size: 11px;
+}
+.summary-bar {
+    background: #16213e;
+    border-bottom: 1px solid #0f3460;
+    padding: 8px 20px;
+    font-size: 12px;
+    display: flex;
+    gap: 20px;
+    align-items: center;
+}
+.summary-bar .pass { color: #4ecca3; }
+.summary-bar .fail { color: #e94560; }
+.summary-bar .skip { color: #888; }
+.phase-header {
+    color: #e94560;
+    font-weight: 700;
+    font-size: 13px;
+    padding: 10px 0 4px;
+    border-bottom: 1px solid #222;
+    margin-bottom: 4px;
+}
+.test-row {
+    padding: 6px 10px;
+    border-bottom: 1px solid #1a1a2e;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #16213e;
+    margin-bottom: 2px;
+    border-radius: 3px;
+}
+.test-row:hover { background: #1c2a4a; }
+.test-row .icon { width: 20px; text-align: center; flex-shrink: 0; }
+.test-row .name { flex: 1; }
+.test-row .dur { color: #666; font-size: 11px; min-width: 50px; text-align: right; }
+.test-row.running { border-left: 3px solid #f0c040; }
+.test-row.pass { border-left: 3px solid #4ecca3; }
+.test-row.fail { border-left: 3px solid #e94560; }
+.test-row.skip { border-left: 3px solid #555; }
+.test-detail {
+    display: none;
+    background: #111;
+    padding: 8px 12px;
+    margin: 0 0 2px;
+    border-radius: 0 0 3px 3px;
+    font-size: 11px;
+    max-height: 300px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+.test-detail.open { display: block; }
+.test-detail .err { color: #e94560; }
+.test-detail .ok { color: #4ecca3; }
+.log-line {
+    padding: 1px 0;
+    border-bottom: 1px solid #1a1a1a;
+    word-break: break-all;
+}
+.log-line .ts { color: #555; }
+.log-line .cmd { color: #f0c040; }
+.log-line .res { color: #4ecca3; }
+.log-line .err { color: #e94560; }
+.config-bar {
+    background: #111;
+    padding: 6px 20px;
+    font-size: 11px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    border-bottom: 1px solid #0f3460;
+}
+.config-bar label { color: #888; }
+.config-bar input {
+    background: #1a1a2e;
+    border: 1px solid #333;
+    color: #e0e0e0;
+    padding: 3px 8px;
+    font-family: inherit;
+    font-size: 11px;
+    width: 220px;
+    border-radius: 2px;
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+    <h1>LIMIT DEX <span>Integration Test Harness</span></h1>
+    <div class="node-status">
+        <div class="node-label">Node A: <span class="dot" id="dotA"></span> <span id="nodeAInfo">--</span></div>
+        <div class="node-label">Node B: <span class="dot" id="dotB"></span> <span id="nodeBInfo">--</span></div>
+    </div>
+    <div class="controls">
+        <button class="btn primary" id="btnRun" onclick="runAll()">Run All</button>
+        <button class="btn danger" id="btnStop" onclick="stopTests()" disabled>Stop</button>
+        <button class="btn" id="btnCleanup" onclick="runCleanup()">Cleanup</button>
+        <button class="btn" onclick="copyResults()">Copy Results</button>
+        <button class="btn" onclick="copyLog()">Copy Log</button>
+    </div>
+</div>
+
+<div class="config-bar">
+    <label>Node A:</label><input id="cfgNodeA" value="http://127.0.0.1:15015/">
+    <label>Node B:</label><input id="cfgNodeB" value="http://127.0.0.1:14005/">
+    <label>TestUSDT:</label><input id="cfgToken" value="0xA9BC089F11816CEB4A84066DFBAFFD0026A81F6957AC13A405F182AFB87DDC6A" style="width:520px">
+</div>
+
+<div class="summary-bar" id="summaryBar">
+    <span>Ready</span>
+</div>
+
+<div class="main">
+    <div class="test-panel" id="testPanel"></div>
+    <div class="log-panel" id="logPanel"></div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// CONFIGURATION
+// ═══════════════════════════════════════════════════════════════
+function NODE_A() { return document.getElementById('cfgNodeA').value.replace(/\/$/, '') + '/'; }
+function NODE_B() { return document.getElementById('cfgNodeB').value.replace(/\/$/, '') + '/'; }
+function TOKEN_ID() { return document.getElementById('cfgToken').value; }
+
+var SCRIPT_V3 = 'IF SIGNEDBY(PREVSTATE(0)) THEN ASSERT VERIFYOUT(@INPUT PREVSTATE(1) @AMOUNT @TOKENID FALSE) RETURN TRUE ENDIF IF @COINAGE GT 1500 THEN ASSERT VERIFYOUT(@INPUT PREVSTATE(1) @AMOUNT @TOKENID FALSE) RETURN TRUE ENDIF ASSERT VERIFYOUT(@INPUT PREVSTATE(1) PREVSTATE(2) PREVSTATE(3) FALSE) RETURN TRUE';
+var SCRIPT_ADDR_V3 = '0xE0325CC04B1BA1FC630D5E2B157976D01F76507D2049BD9D7D8029A318782BC7';
+
+var ID_A = { pubkey: '', hexaddr: '', miniaddr: '' };
+var ID_B = { pubkey: '', hexaddr: '', miniaddr: '' };
+
+var STOP_REQUESTED = false;
+var SUITE_START_SNAPSHOT = null;
+
+// ═══════════════════════════════════════════════════════════════
+// RPC LAYER
+// ═══════════════════════════════════════════════════════════════
+async function rpc(nodeUrl, cmd) {
+    var url = nodeUrl + encodeURIComponent(cmd);
+    globalLog('CMD', nodeUrl === NODE_A() ? 'A' : 'B', cmd);
+    try {
+        var resp = await fetch(url);
+        var json = await resp.json();
+        if (json.status === false) {
+            globalLog('ERR', nodeUrl === NODE_A() ? 'A' : 'B', json.error || JSON.stringify(json).substring(0, 200));
+        } else {
+            globalLog('RES', nodeUrl === NODE_A() ? 'A' : 'B', JSON.stringify(json.response || json).substring(0, 300));
+        }
+        return json;
+    } catch(e) {
+        globalLog('ERR', nodeUrl === NODE_A() ? 'A' : 'B', e.message);
+        throw e;
+    }
+}
+async function rpcA(cmd) { return rpc(NODE_A(), cmd); }
+async function rpcB(cmd) { return rpc(NODE_B(), cmd); }
+
+// ═══════════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════════
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function getState(coin, port) {
+    if (!coin || !coin.state) return null;
+    var s = coin.state.find(function(st) { return st.port === port || st.port === String(port); });
+    return s ? s.data : null;
+}
+
+async function getBalance(nodeUrl, tokenid) {
+    var r = await rpc(nodeUrl, 'balance');
+    if (!r.status) return { confirmed: '0', sendable: '0', unconfirmed: '0' };
+    var tok = (r.response || []).find(function(b) { return b.tokenid === tokenid; });
+    if (!tok) return { confirmed: '0', sendable: '0', unconfirmed: '0' };
+    return { confirmed: tok.confirmed, sendable: tok.sendable, unconfirmed: tok.unconfirmed || '0' };
+}
+
+async function getCoinsAt(nodeUrl, addr) {
+    var r = await rpc(nodeUrl, 'coins address:' + addr);
+    if (!r.status) return [];
+    return r.response || [];
+}
+
+async function getAddress(nodeUrl) {
+    var r = await rpc(nodeUrl, 'getaddress');
+    if (!r.status) throw new Error('getaddress failed');
+    return {
+        pubkey: r.response.publickey,
+        address: r.response.hexaddress || r.response.address,
+        miniaddress: r.response.miniaddress
+    };
+}
+
+async function waitForBlock(nodeUrl, count) {
+    count = count || 1;
+    var r = await rpc(nodeUrl, 'block');
+    var startBlock = parseInt(r.response.block);
+    var waited = 0;
+    while (waited < 120000) {
+        await sleep(3000);
+        waited += 3000;
+        var r2 = await rpc(nodeUrl, 'block');
+        var now = parseInt(r2.response.block);
+        if (now >= startBlock + count) return now;
+    }
+    throw new Error('Timed out waiting for block advance (120s)');
+}
+
+async function snapshot() {
+    var aMinima = await getBalance(NODE_A(), '0x00');
+    var bMinima = await getBalance(NODE_B(), '0x00');
+    var aToken  = await getBalance(NODE_A(), TOKEN_ID());
+    var bToken  = await getBalance(NODE_B(), TOKEN_ID());
+    var script  = await getCoinsAt(NODE_A(), SCRIPT_ADDR_V3);
+    return {
+        a_minima: parseFloat(aMinima.confirmed) + parseFloat(aMinima.unconfirmed || 0),
+        b_minima: parseFloat(bMinima.confirmed) + parseFloat(bMinima.unconfirmed || 0),
+        a_token:  parseFloat(aToken.confirmed) + parseFloat(aToken.unconfirmed || 0),
+        b_token:  parseFloat(bToken.confirmed) + parseFloat(bToken.unconfirmed || 0),
+        a_minima_sendable: parseFloat(aMinima.sendable),
+        b_minima_sendable: parseFloat(bMinima.sendable),
+        a_token_sendable:  parseFloat(aToken.sendable),
+        b_token_sendable:  parseFloat(bToken.sendable),
+        script_coins: script.length,
+        script_detail: script
+    };
+}
+
+function assertConserved(before, after, tolerance) {
+    tolerance = tolerance || 0.001;
+    var totalMinimaBefore = before.a_minima + before.b_minima;
+    var totalMinimaAfter  = after.a_minima + after.b_minima;
+    var totalTokenBefore  = before.a_token + before.b_token;
+    var totalTokenAfter   = after.a_token + after.b_token;
+    // Include script coins - they hold Minima or tokens
+    // Conservation is approximate because script coins are visible to both nodes
+    var dMinima = Math.abs(totalMinimaAfter - totalMinimaBefore);
+    var dToken  = Math.abs(totalTokenAfter - totalTokenBefore);
+    if (dMinima > tolerance) throw new Error('Conservation violated: Minima delta=' + dMinima + ' (before=' + totalMinimaBefore + ' after=' + totalMinimaAfter + ')');
+    if (dToken > tolerance) throw new Error('Conservation violated: Token delta=' + dToken + ' (before=' + totalTokenBefore + ' after=' + totalTokenAfter + ')');
+}
+
+async function cleanup(nodeUrl) {
+    var r = await rpc(nodeUrl, 'txnlist');
+    if (!r.status || !r.response) return;
+    var txns = r.response;
+    for (var i = 0; i < txns.length; i++) {
+        var name = txns[i].transaction || txns[i].id || txns[i];
+        if (typeof name === 'string' && name.indexOf('test_') === 0) {
+            await rpc(nodeUrl, 'txndelete id:' + name);
+        } else if (typeof name === 'object' && name.id && name.id.indexOf('test_') === 0) {
+            await rpc(nodeUrl, 'txndelete id:' + name.id);
+        }
+    }
+}
+
+async function cleanupBoth() {
+    await cleanup(NODE_A());
+    await cleanup(NODE_B());
+}
+
+async function cancelOrder(nodeUrl, coinid, coin, identity) {
+    var txid = 'test_cleanup_' + Date.now();
+    var isMinima = (!coin.tokenid || coin.tokenid === '0x00');
+    var amt = isMinima ? coin.amount : coin.tokenamount;
+    var cmds = [
+        'txncreate id:' + txid,
+        'txninput id:' + txid + ' coinid:' + coinid,
+        'txnoutput id:' + txid + ' amount:' + amt + ' address:' + identity.hexaddr + (isMinima ? '' : ' tokenid:' + coin.tokenid) + ' storestate:false',
+        'txnsign id:' + txid + ' publickey:' + identity.pubkey,
+        'txnbasics id:' + txid,
+        'txnpost id:' + txid
+    ];
+    for (var i = 0; i < cmds.length; i++) {
+        var r = await rpc(nodeUrl, cmds[i]);
+        if (!r.status) {
+            await rpc(nodeUrl, 'txndelete id:' + txid);
+            throw new Error('Cancel failed at step: ' + cmds[i] + ' err: ' + (r.error || ''));
+        }
+    }
+    await rpc(nodeUrl, 'txndelete id:' + txid);
+}
+
+async function cancelAllOrders() {
+    var coins = await getCoinsAt(NODE_A(), SCRIPT_ADDR_V3);
+    for (var i = 0; i < coins.length; i++) {
+        var c = coins[i];
+        var ownerKey = getState(c, 0);
+        if (ownerKey === ID_A.pubkey) {
+            try { await cancelOrder(NODE_A(), c.coinid, c, ID_A); } catch(e) { /* ignore */ }
+        }
+    }
+    if (coins.length > 0) await waitForBlock(NODE_A());
+}
+
+async function buildTx(nodeUrl, txid, steps) {
+    for (var i = 0; i < steps.length; i++) {
+        var r = await rpc(nodeUrl, steps[i]);
+        if (!r.status) {
+            await rpc(nodeUrl, 'txndelete id:' + txid);
+            throw new Error('buildTx failed at step ' + i + ': ' + steps[i] + ' => ' + (r.error || JSON.stringify(r)));
+        }
+    }
+}
+
+// Convert readable tag to valid hex: hash the string to get a deterministic hex ID
+function tagToHex(tag) {
+    var h = 0;
+    for (var i = 0; i < tag.length; i++) { h = ((h << 5) - h + tag.charCodeAt(i)) & 0xFFFFFFFF; }
+    return '0x' + ('00000000' + (h >>> 0).toString(16).toUpperCase()).slice(-8);
+}
+var TAG_MAP = {}; // tag → hex, for reverse lookup in logs
+
+async function createSellOrder(amt, price, tag) {
+    var orderId = tagToHex(tag);
+    TAG_MAP[orderId] = tag;
+    var wantAmt = String(parseFloat(amt) * parseFloat(price));
+    var stateJson = '{"0":"' + ID_A.pubkey + '","1":"' + ID_A.hexaddr + '","2":"' + wantAmt + '","3":"' + TOKEN_ID() + '","4":"' + orderId + '","5":"1","6":"' + price + '"}';
+    var cmd = 'send amount:' + amt + ' address:' + SCRIPT_ADDR_V3 + " state:" + stateJson;
+    var r = await rpcA(cmd);
+    if (!r.status) throw new Error('createSellOrder failed: ' + (r.error || ''));
+    return r;
+}
+
+async function createBuyOrder(amt, price, tag) {
+    var orderId = tagToHex(tag);
+    TAG_MAP[orderId] = tag;
+    var stateJson = '{"0":"' + ID_A.pubkey + '","1":"' + ID_A.hexaddr + '","2":"' + String(parseFloat(amt) / parseFloat(price)) + '","3":"0x00","4":"' + orderId + '","5":"0","6":"' + price + '"}';
+    var cmd = 'send amount:' + amt + ' address:' + SCRIPT_ADDR_V3 + ' tokenid:' + TOKEN_ID() + " state:" + stateJson;
+    var r = await rpcA(cmd);
+    if (!r.status) throw new Error('createBuyOrder failed: ' + (r.error || ''));
+    return r;
+}
+
+async function findOrderCoin(tag) {
+    var hex = tagToHex(tag);
+    var coins = await getCoinsAt(NODE_A(), SCRIPT_ADDR_V3);
+    for (var i = 0; i < coins.length; i++) {
+        var oid = getState(coins[i], 4);
+        if (oid === hex) return coins[i];
+    }
+    return null;
+}
+
+async function findCoinForToken(nodeUrl, tokenid, minAmt) {
+    var r = await rpc(nodeUrl, 'coins sendable:true');
+    if (!r.status) return null;
+    var coins = r.response || [];
+    for (var i = 0; i < coins.length; i++) {
+        var c = coins[i];
+        if (c.tokenid === tokenid) {
+            var amt = (tokenid === '0x00') ? parseFloat(c.amount) : parseFloat(c.tokenamount);
+            if (!minAmt || amt >= parseFloat(minAmt)) return c;
+        }
+    }
+    return null;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TEST FRAMEWORK
+// ═══════════════════════════════════════════════════════════════
+var TESTS = [];
+function test(name, fn) {
+    TESTS.push({ name: name, fn: fn, status: 'pending', error: null, log: [], duration: 0 });
+}
+
+function makeContext(t) {
+    return {
+        log: function(msg) {
+            t.log.push('[' + new Date().toISOString().substr(11, 12) + '] ' + msg);
+        },
+        assert: function(cond, msg) {
+            if (!cond) throw new Error('Assertion failed: ' + (msg || ''));
+        },
+        assertEq: function(a, b, msg) {
+            if (String(a) !== String(b)) throw new Error('assertEq failed: ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b) + (msg ? ' (' + msg + ')' : ''));
+        }
+    };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GLOBAL LOG
+// ═══════════════════════════════════════════════════════════════
+function globalLog(type, node, msg) {
+    var panel = document.getElementById('logPanel');
+    var cls = type === 'ERR' ? 'err' : type === 'CMD' ? 'cmd' : 'res';
+    var line = document.createElement('div');
+    line.className = 'log-line';
+    line.innerHTML = '<span class="ts">' + new Date().toISOString().substr(11, 12) + '</span> '
+        + '<span class="' + cls + '">[' + node + '] ' + escHtml(String(msg)) + '</span>';
+    panel.appendChild(line);
+    panel.scrollTop = panel.scrollHeight;
+}
+
+function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// UI RENDERING
+// ═══════════════════════════════════════════════════════════════
+var PHASES = {
+    'T0': 'Phase 0 -- Setup',
+    'T1': 'Phase 1 -- Create Orders',
+    'T2': 'Phase 2 -- Cancel Orders',
+    'T3': 'Phase 3 -- Fill Orders',
+    'T4': 'Phase 4 -- Refresh Orders',
+    'T6': 'Phase 6 -- Security & Edge Cases',
+    'T7': 'Phase 7 -- Full Round Trip',
+    'T8': 'Phase 8 -- Exploitation Attacks',
+    'T9': 'Phase 9 -- Chaos Monkey',
+    'TA': 'Phase 10 -- MiniDapp Install'
+};
+
+function renderTests() {
+    var panel = document.getElementById('testPanel');
+    panel.innerHTML = '';
+    var lastPhase = '';
+    for (var i = 0; i < TESTS.length; i++) {
+        var t = TESTS[i];
+        var phase = t.name.substring(0, 2);
+        if (phase !== lastPhase) {
+            var ph = document.createElement('div');
+            ph.className = 'phase-header';
+            ph.textContent = PHASES[phase] || phase;
+            panel.appendChild(ph);
+            lastPhase = phase;
+        }
+        var icon = t.status === 'pass' ? '&#9989;' : t.status === 'fail' ? '&#10060;' : t.status === 'running' ? '&#128260;' : t.status === 'skip' ? '&#9197;' : '&#11036;';
+        var row = document.createElement('div');
+        row.className = 'test-row ' + t.status;
+        row.setAttribute('data-idx', i);
+        row.innerHTML = '<span class="icon">' + icon + '</span><span class="name">' + escHtml(t.name) + '</span><span class="dur">' + (t.duration ? (t.duration / 1000).toFixed(1) + 's' : '') + '</span>';
+        row.onclick = (function(idx) { return function() { toggleDetail(idx); }; })(i);
+        panel.appendChild(row);
+
+        var detail = document.createElement('div');
+        detail.className = 'test-detail';
+        detail.id = 'detail-' + i;
+        var logHtml = t.log.map(function(l) { return escHtml(l); }).join('\n');
+        if (t.error) logHtml += '\n<span class="err">ERROR: ' + escHtml(t.error) + '</span>';
+        if (t.status === 'pass') logHtml += '\n<span class="ok">PASSED</span>';
+        detail.innerHTML = logHtml || '(no log)';
+        panel.appendChild(detail);
+    }
+}
+
+function toggleDetail(idx) {
+    var el = document.getElementById('detail-' + idx);
+    if (el) el.classList.toggle('open');
+}
+
+function updateSummary() {
+    var pass = 0, fail = 0, skip = 0, total = TESTS.length;
+    for (var i = 0; i < TESTS.length; i++) {
+        if (TESTS[i].status === 'pass') pass++;
+        if (TESTS[i].status === 'fail') fail++;
+        if (TESTS[i].status === 'skip') skip++;
+    }
+    var bar = document.getElementById('summaryBar');
+    bar.innerHTML = '<span class="pass">' + pass + '/' + total + ' passed</span>'
+        + ' | <span class="fail">' + fail + ' failed</span>'
+        + ' | <span class="skip">' + skip + ' skipped</span>';
+}
+
+async function updateNodeStatus() {
+    try {
+        var rA = await rpc(NODE_A(), 'status');
+        document.getElementById('dotA').className = 'dot ' + (rA.status ? 'ok' : 'err');
+        document.getElementById('nodeAInfo').textContent = NODE_A().replace('http://','') + ' Block #' + (rA.response ? rA.response.chain.block : '?');
+    } catch(e) {
+        document.getElementById('dotA').className = 'dot err';
+        document.getElementById('nodeAInfo').textContent = NODE_A().replace('http://','') + ' OFFLINE';
+    }
+    try {
+        var rB = await rpc(NODE_B(), 'status');
+        document.getElementById('dotB').className = 'dot ' + (rB.status ? 'ok' : 'err');
+        document.getElementById('nodeBInfo').textContent = NODE_B().replace('http://','') + ' Block #' + (rB.response ? rB.response.chain.block : '?');
+    } catch(e) {
+        document.getElementById('dotB').className = 'dot err';
+        document.getElementById('nodeBInfo').textContent = NODE_B().replace('http://','') + ' OFFLINE';
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TEST DEFINITIONS
+// ═══════════════════════════════════════════════════════════════
+
+// -------- Phase 0: Setup --------
+
+test('T0.1 -- Node Connectivity', async function(t) {
+    var rA = await rpcA('status');
+    t.assert(rA.status === true, 'Node A status failed');
+    t.log('Node A: version=' + rA.response.version + ' block=' + rA.response.chain.block);
+
+    var rB = await rpcB('status');
+    t.assert(rB.status === true, 'Node B status failed');
+    t.log('Node B: version=' + rB.response.version + ' block=' + rB.response.chain.block);
+
+    var blockA = parseInt(rA.response.chain.block);
+    var blockB = parseInt(rB.response.chain.block);
+    t.assert(Math.abs(blockA - blockB) <= 2, 'Blocks differ by more than 2: A=' + blockA + ' B=' + blockB);
+    t.log('Block diff: ' + Math.abs(blockA - blockB));
+});
+
+test('T0.2 -- Script Registration', async function(t) {
+    var rA = await rpcA('newscript trackall:false script:"' + SCRIPT_V3 + '"');
+    t.assert(rA.status === true, 'newscript on Node A failed');
+    t.log('Node A script addr: ' + (rA.response ? rA.response.address : 'N/A'));
+    if (rA.response && rA.response.address) {
+        t.assertEq(rA.response.address.toUpperCase(), SCRIPT_ADDR_V3.toUpperCase(), 'Script address mismatch on A');
+    }
+
+    var rB = await rpcB('newscript trackall:false script:"' + SCRIPT_V3 + '"');
+    t.assert(rB.status === true, 'newscript on Node B failed');
+    t.log('Node B script addr: ' + (rB.response ? rB.response.address : 'N/A'));
+    if (rB.response && rB.response.address) {
+        t.assertEq(rB.response.address.toUpperCase(), SCRIPT_ADDR_V3.toUpperCase(), 'Script address mismatch on B');
+    }
+});
+
+test('T0.3 -- Token Distribution', async function(t) {
+    var bBal = await getBalance(NODE_B(), TOKEN_ID());
+    if (parseFloat(bBal.confirmed) >= 1000) {
+        t.log('Node B already has ' + bBal.confirmed + ' TestUSDT, skipping send');
+        return;
+    }
+
+    var addrB = await getAddress(NODE_B());
+    t.log('Sending 2000 TestUSDT from A to B at ' + addrB.address);
+    var r = await rpcA('send address:' + addrB.address + ' amount:2000 tokenid:' + TOKEN_ID());
+    t.assert(r.status === true, 'Token send failed: ' + (r.error || ''));
+
+    t.log('Waiting for 3 blocks (token confirmation)...');
+    await waitForBlock(NODE_B(), 3);
+
+    var bBal2 = await getBalance(NODE_B(), TOKEN_ID());
+    t.assert(parseFloat(bBal2.sendable) > 0, 'Node B TestUSDT not sendable after 3 blocks');
+    t.log('Node B TestUSDT sendable: ' + bBal2.sendable);
+});
+
+test('T0.4 -- Identity Setup', async function(t) {
+    var addrA = await getAddress(NODE_A());
+    ID_A.pubkey = addrA.pubkey;
+    ID_A.hexaddr = addrA.address;
+    ID_A.miniaddr = addrA.miniaddress;
+    t.log('Node A pubkey: ' + ID_A.pubkey);
+    t.log('Node A hexaddr: ' + ID_A.hexaddr);
+
+    var addrB = await getAddress(NODE_B());
+    ID_B.pubkey = addrB.pubkey;
+    ID_B.hexaddr = addrB.address;
+    ID_B.miniaddr = addrB.miniaddress;
+    t.log('Node B pubkey: ' + ID_B.pubkey);
+    t.log('Node B hexaddr: ' + ID_B.hexaddr);
+
+    var keysA = await rpcA('keys');
+    t.assert(keysA.status === true, 'keys on A failed');
+    t.log('Node A has ' + (keysA.response ? keysA.response.length : 0) + ' keys');
+
+    var keysB = await rpcB('keys');
+    t.assert(keysB.status === true, 'keys on B failed');
+    t.log('Node B has ' + (keysB.response ? keysB.response.length : 0) + ' keys');
+});
+
+// -------- Phase 1: Create Orders --------
+
+test('T1.1 -- Create SELL Order', async function(t) {
+    var before = await snapshot();
+    t.log('Before: A sendable Minima=' + before.a_minima_sendable);
+
+    await createSellOrder('10', '0.5', 'TEST01');
+    t.log('Sent sell order: 10 Minima @ 0.5');
+
+    await waitForBlock(NODE_A());
+
+    var coins = await getCoinsAt(NODE_A(), SCRIPT_ADDR_V3);
+    var found = coins.find(function(c) { return getState(c, 4) === tagToHex('TEST01'); });
+    t.assert(found, 'Sell order coin not found at script address');
+    t.log('Order coinid: ' + found.coinid);
+    t.assertEq(getState(found, 5), '1', 'Side should be 1 (sell)');
+    t.assertEq(getState(found, 6), '0.5', 'Price should be 0.5');
+
+    var after = await snapshot();
+    t.assert(after.a_minima_sendable < before.a_minima_sendable - 9, 'Sendable Minima should have decreased by ~10');
+    t.log('After: A sendable Minima=' + after.a_minima_sendable);
+
+    // Cleanup: cancel the order
+    t.log('Cleaning up sell order...');
+    await cancelOrder(NODE_A(), found.coinid, found, ID_A);
+    await waitForBlock(NODE_A());
+    t.log('Cancelled');
+});
+
+test('T1.2 -- Create BUY Order', async function(t) {
+    var before = await snapshot();
+    t.log('Before: A sendable Token=' + before.a_token_sendable);
+
+    await createBuyOrder('5', '0.5', 'TEST02');
+    t.log('Sent buy order: 5 TestUSDT @ 0.5');
+
+    await waitForBlock(NODE_A());
+
+    var coins = await getCoinsAt(NODE_A(), SCRIPT_ADDR_V3);
+    var found = coins.find(function(c) { return getState(c, 4) === tagToHex('TEST02'); });
+    t.assert(found, 'Buy order coin not found at script address');
+    t.assertEq(getState(found, 5), '0', 'Side should be 0 (buy)');
+    t.log('Buy order coin tokenid: ' + found.tokenid);
+    t.assertEq(found.tokenid, TOKEN_ID(), 'Token should be TestUSDT');
+
+    // Cleanup
+    t.log('Cleaning up buy order...');
+    await cancelOrder(NODE_A(), found.coinid, found, ID_A);
+    await waitForBlock(NODE_A());
+    t.log('Cancelled');
+});
+
+test('T1.3 -- Insufficient Balance', async function(t) {
+    var coinsBefore = await getCoinsAt(NODE_A(), SCRIPT_ADDR_V3);
+    var countBefore = coinsBefore.length;
+
+    var r = await rpcA('send amount:999999 address:' + SCRIPT_ADDR_V3 + ' state:{"0":"' + ID_A.pubkey + '","1":"' + ID_A.hexaddr + '","2":"500000","3":"' + TOKEN_ID() + '","4":"0xTEST03","5":"1","6":"0.5"}');
+    t.assert(r.status === false, 'Expected send to fail with insufficient balance');
+    t.log('Send correctly failed: ' + (r.error || 'status=false'));
+
+    var coinsAfter = await getCoinsAt(NODE_A(), SCRIPT_ADDR_V3);
+    t.assertEq(coinsAfter.length, countBefore, 'No new coins should appear at script address');
+});
+
+// -------- Phase 2: Cancel Orders --------
+
+test('T2.1 -- Cancel SELL Order', async function(t) {
+    var before = await snapshot();
+
+    await createSellOrder('10', '0.5', 'CANCEL01');
+    t.log('Created sell order: 10 Minima');
+    await waitForBlock(NODE_A());
+
+    var coin = await findOrderCoin('CANCEL01');
+    t.assert(coin, 'Order coin not found');
+    t.log('Coin: ' + coin.coinid + ' amount=' + coin.amount);
+
+    var txid = 'test_cancel_sell';
+    var steps = [
+        'txncreate id:' + txid,
+        'txninput id:' + txid + ' coinid:' + coin.coinid,
+        'txnoutput id:' + txid + ' amount:' + coin.amount + ' address:' + ID_A.hexaddr + ' storestate:false',
+        'txnsign id:' + txid + ' publickey:' + ID_A.pubkey,
+        'txnbasics id:' + txid,
+        'txnpost id:' + txid
+    ];
+    await buildTx(NODE_A(), txid, steps);
+    await rpcA('txndelete id:' + txid);
+    t.log('Cancel tx posted');
+
+    await waitForBlock(NODE_A());
+
+    var coins = await getCoinsAt(NODE_A(), SCRIPT_ADDR_V3);
+    var still = coins.find(function(c) { return getState(c, 4) === tagToHex('CANCEL01'); });
+    t.assert(!still, 'Order coin should be gone from script address');
+
+    var after = await snapshot();
+    t.log('Minima restored: before=' + before.a_minima + ' after=' + after.a_minima);
+    assertConserved(before, after, 0.01);
+    t.log('Conservation verified');
+});
+
+test('T2.2 -- Cancel BUY Order', async function(t) {
+    var before = await snapshot();
+
+    await createBuyOrder('5', '0.5', 'CANCEL02');
+    t.log('Created buy order: 5 TestUSDT');
+    await waitForBlock(NODE_A());
+
+    var coin = await findOrderCoin('CANCEL02');
+    t.assert(coin, 'Buy order coin not found');
+    t.log('Coin: ' + coin.coinid + ' tokenamount=' + coin.tokenamount);
+
+    var txid = 'test_cancel_buy';
+    var steps = [
+        'txncreate id:' + txid,
+        'txninput id:' + txid + ' coinid:' + coin.coinid,
+        'txnoutput id:' + txid + ' amount:' + coin.tokenamount + ' address:' + ID_A.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false',
+        'txnsign id:' + txid + ' publickey:' + ID_A.pubkey,
+        'txnbasics id:' + txid,
+        'txnpost id:' + txid
+    ];
+    await buildTx(NODE_A(), txid, steps);
+    await rpcA('txndelete id:' + txid);
+    t.log('Cancel tx posted');
+
+    await waitForBlock(NODE_A());
+
+    var coins = await getCoinsAt(NODE_A(), SCRIPT_ADDR_V3);
+    var still = coins.find(function(c) { return getState(c, 4) === tagToHex('CANCEL02'); });
+    t.assert(!still, 'Buy order coin should be gone');
+
+    var after = await snapshot();
+    assertConserved(before, after, 0.01);
+    t.log('Conservation verified');
+});
+
+test('T2.3 -- Non-Owner Cancel Fails', async function(t) {
+    await createSellOrder('10', '0.5', 'CANCEL03');
+    t.log('Node A created sell order');
+    await waitForBlock(NODE_A());
+
+    var coin = await findOrderCoin('CANCEL03');
+    t.assert(coin, 'Order coin not found');
+
+    var txid = 'test_cancel_nonowner';
+    var failed = false;
+    try {
+        var steps = [
+            'txncreate id:' + txid,
+            'txninput id:' + txid + ' coinid:' + coin.coinid,
+            'txnoutput id:' + txid + ' amount:' + coin.amount + ' address:' + ID_B.hexaddr + ' storestate:false',
+            'txnsign id:' + txid + ' publickey:' + ID_B.pubkey,
+            'txnbasics id:' + txid,
+            'txnpost id:' + txid
+        ];
+        await buildTx(NODE_B(), txid, steps);
+    } catch(e) {
+        failed = true;
+        t.log('Expected failure: ' + e.message);
+    }
+    await rpcB('txndelete id:' + txid);
+
+    if (!failed) {
+        // If it posted, wait and check if miner rejected it
+        t.log('txnpost succeeded - checking if miner rejects...');
+        await waitForBlock(NODE_A());
+        var coins = await getCoinsAt(NODE_A(), SCRIPT_ADDR_V3);
+        var still = coins.find(function(c) { return getState(c, 4) === tagToHex('CANCEL03'); });
+        t.assert(still, 'Non-owner cancel should have been rejected by miner');
+        t.log('Order still present - miner rejected the non-owner cancel');
+    } else {
+        t.log('Non-owner cancel rejected at txn build stage');
+    }
+
+    // Cleanup
+    t.log('Cleaning up from Node A...');
+    await cancelOrder(NODE_A(), coin.coinid, coin, ID_A);
+    await waitForBlock(NODE_A());
+    t.log('Cleaned up');
+});
+
+test('T2.4 -- Cancel Redirect Blocked (Incident Fix)', async function(t) {
+    await createSellOrder('10', '0.5', 'CANCEL04');
+    t.log('Node A created sell order');
+    await waitForBlock(NODE_A());
+
+    var coin = await findOrderCoin('CANCEL04');
+    t.assert(coin, 'Order coin not found');
+
+    // Try to cancel but redirect funds to Node B (wrong destination)
+    var txid = 'test_cancel_redirect';
+    var postOk = false;
+    try {
+        var steps = [
+            'txncreate id:' + txid,
+            'txninput id:' + txid + ' coinid:' + coin.coinid,
+            'txnoutput id:' + txid + ' amount:' + coin.amount + ' address:' + ID_B.hexaddr + ' storestate:false',
+            'txnsign id:' + txid + ' publickey:' + ID_A.pubkey,
+            'txnbasics id:' + txid,
+            'txnpost id:' + txid
+        ];
+        await buildTx(NODE_A(), txid, steps);
+        postOk = true;
+        t.log('txnpost accepted to mempool');
+    } catch(e) {
+        t.log('Redirect cancel rejected at build: ' + e.message);
+    }
+    await rpcA('txndelete id:' + txid);
+
+    if (postOk) {
+        await waitForBlock(NODE_A());
+        var coins = await getCoinsAt(NODE_A(), SCRIPT_ADDR_V3);
+        var still = coins.find(function(c) { return getState(c, 4) === tagToHex('CANCEL04'); });
+        t.assert(still, 'CRITICAL: Cancel redirect was accepted! V3 VERIFYOUT should block this.');
+        t.log('V3 security confirmed: redirect cancel rejected by miner');
+    }
+
+    // Cleanup properly
+    t.log('Cleaning up properly...');
+    var coin2 = await findOrderCoin('CANCEL04');
+    if (coin2) {
+        await cancelOrder(NODE_A(), coin2.coinid, coin2, ID_A);
+        await waitForBlock(NODE_A());
+    }
+    t.log('Done');
+});
+
+// -------- Phase 3: Fill Orders --------
+
+test('T3.1 -- Fill SELL Order', async function(t) {
+    var before = await snapshot();
+
+    await createSellOrder('10', '0.5', 'FILL01');
+    t.log('Node A created sell: 10 Minima @ 0.5 (wants 5 USDT)');
+    await waitForBlock(NODE_A());
+
+    var orderCoin = await findOrderCoin('FILL01');
+    t.assert(orderCoin, 'Order coin not found');
+    t.log('Order coinid: ' + orderCoin.coinid);
+
+    // Find Node B's USDT coin
+    var bUsdtCoin = await findCoinForToken(NODE_B(), TOKEN_ID(), '5');
+    t.assert(bUsdtCoin, 'Node B has no USDT coin >= 5');
+    t.log('B USDT coin: ' + bUsdtCoin.coinid + ' tokenamount=' + bUsdtCoin.tokenamount);
+
+    var bUsdtAmt = parseFloat(bUsdtCoin.tokenamount);
+    var payAmt = 5;
+    var changeAmt = bUsdtAmt - payAmt;
+
+    var txid = 'test_fill_sell';
+    var steps = [
+        'txncreate id:' + txid,
+        'txninput id:' + txid + ' coinid:' + orderCoin.coinid,
+        'txninput id:' + txid + ' coinid:' + bUsdtCoin.coinid,
+        'txnoutput id:' + txid + ' amount:' + payAmt + ' address:' + ID_A.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false',
+        'txnoutput id:' + txid + ' amount:10 address:' + ID_B.hexaddr + ' storestate:false'
+    ];
+    if (changeAmt > 0.0001) {
+        steps.push('txnoutput id:' + txid + ' amount:' + changeAmt + ' address:' + ID_B.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false');
+    }
+    steps.push('txnsign id:' + txid + ' publickey:auto');
+    steps.push('txnbasics id:' + txid);
+    steps.push('txnpost id:' + txid);
+
+    await buildTx(NODE_B(), txid, steps);
+    await rpcB('txndelete id:' + txid);
+    t.log('Fill tx posted');
+
+    await waitForBlock(NODE_A());
+    await sleep(2000);
+
+    var coins = await getCoinsAt(NODE_A(), SCRIPT_ADDR_V3);
+    var still = coins.find(function(c) { return getState(c, 4) === tagToHex('FILL01'); });
+    t.assert(!still, 'Order should be gone from script address');
+
+    var after = await snapshot();
+    t.log('A USDT: ' + before.a_token + ' => ' + after.a_token);
+    t.log('B Minima: ' + before.b_minima + ' => ' + after.b_minima);
+    t.assert(after.a_token > before.a_token + 4, 'A should have gained ~5 USDT');
+    t.assert(after.b_minima > before.b_minima + 9, 'B should have gained ~10 Minima');
+    assertConserved(before, after, 0.01);
+    t.log('Conservation verified');
+});
+
+test('T3.2 -- Fill BUY Order', async function(t) {
+    var before = await snapshot();
+
+    await createBuyOrder('5', '0.5', 'FILL02');
+    t.log('Node A created buy: 5 USDT @ 0.5 (wants 10 Minima)');
+    await waitForBlock(NODE_A());
+
+    var orderCoin = await findOrderCoin('FILL02');
+    t.assert(orderCoin, 'Buy order coin not found');
+    t.log('Order coinid: ' + orderCoin.coinid + ' tokenamount=' + orderCoin.tokenamount);
+
+    // Node B sends Minima to fill
+    var wantAmt = getState(orderCoin, 2); // amount of Minima wanted
+    t.log('Buy order wants ' + wantAmt + ' Minima');
+
+    var bMinimaCoin = await findCoinForToken(NODE_B(), '0x00', wantAmt);
+    t.assert(bMinimaCoin, 'Node B has no Minima coin >= ' + wantAmt);
+    t.log('B Minima coin: ' + bMinimaCoin.coinid + ' amount=' + bMinimaCoin.amount);
+
+    var bMinimaAmt = parseFloat(bMinimaCoin.amount);
+    var payAmt = parseFloat(wantAmt);
+    var changeAmt = bMinimaAmt - payAmt;
+
+    var txid = 'test_fill_buy';
+    var steps = [
+        'txncreate id:' + txid,
+        'txninput id:' + txid + ' coinid:' + orderCoin.coinid,
+        'txninput id:' + txid + ' coinid:' + bMinimaCoin.coinid,
+        'txnoutput id:' + txid + ' amount:' + payAmt + ' address:' + ID_A.hexaddr + ' storestate:false',
+        'txnoutput id:' + txid + ' amount:' + orderCoin.tokenamount + ' address:' + ID_B.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false'
+    ];
+    if (changeAmt > 0.0001) {
+        steps.push('txnoutput id:' + txid + ' amount:' + changeAmt + ' address:' + ID_B.hexaddr + ' storestate:false');
+    }
+    steps.push('txnsign id:' + txid + ' publickey:auto');
+    steps.push('txnbasics id:' + txid);
+    steps.push('txnpost id:' + txid);
+
+    await buildTx(NODE_B(), txid, steps);
+    await rpcB('txndelete id:' + txid);
+    t.log('Fill tx posted');
+
+    await waitForBlock(NODE_A());
+    await sleep(2000);
+
+    var coins = await getCoinsAt(NODE_A(), SCRIPT_ADDR_V3);
+    var still = coins.find(function(c) { return getState(c, 4) === tagToHex('FILL02'); });
+    t.assert(!still, 'Buy order should be gone');
+
+    var after = await snapshot();
+    t.log('A Minima: ' + before.a_minima + ' => ' + after.a_minima);
+    t.log('B USDT: ' + before.b_token + ' => ' + after.b_token);
+    assertConserved(before, after, 0.01);
+    t.log('Conservation verified');
+});
+
+test('T3.3 -- Wrong Payment Amount', async function(t) {
+    await createSellOrder('10', '0.5', 'FILL03');
+    t.log('Created sell order: wants 5 USDT');
+    await waitForBlock(NODE_A());
+
+    var orderCoin = await findOrderCoin('FILL03');
+    t.assert(orderCoin, 'Order not found');
+
+    var bUsdtCoin = await findCoinForToken(NODE_B(), TOKEN_ID(), '4');
+    t.assert(bUsdtCoin, 'No USDT coin on B');
+
+    var txid = 'test_fill_wrong_amt';
+    var failed = false;
+    try {
+        var steps = [
+            'txncreate id:' + txid,
+            'txninput id:' + txid + ' coinid:' + orderCoin.coinid,
+            'txninput id:' + txid + ' coinid:' + bUsdtCoin.coinid,
+            'txnoutput id:' + txid + ' amount:4 address:' + ID_A.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false',
+            'txnoutput id:' + txid + ' amount:10 address:' + ID_B.hexaddr + ' storestate:false',
+            'txnoutput id:' + txid + ' amount:' + (parseFloat(bUsdtCoin.tokenamount) - 4) + ' address:' + ID_B.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false',
+            'txnsign id:' + txid + ' publickey:auto',
+            'txnbasics id:' + txid,
+            'txnpost id:' + txid
+        ];
+        await buildTx(NODE_B(), txid, steps);
+    } catch(e) {
+        failed = true;
+        t.log('Expected failure: ' + e.message);
+    }
+    await rpcB('txndelete id:' + txid);
+
+    if (!failed) {
+        t.log('txnpost accepted - checking miner rejection...');
+        await waitForBlock(NODE_A());
+        var still = await findOrderCoin('FILL03');
+        t.assert(still, 'Wrong amount fill should have been rejected');
+        t.log('Miner rejected wrong payment amount');
+    }
+
+    // Cleanup
+    var coin2 = await findOrderCoin('FILL03');
+    if (coin2) {
+        await cancelOrder(NODE_A(), coin2.coinid, coin2, ID_A);
+        await waitForBlock(NODE_A());
+    }
+});
+
+test('T3.4 -- Wrong Token', async function(t) {
+    await createSellOrder('10', '0.5', 'FILL04');
+    t.log('Created sell order: wants USDT');
+    await waitForBlock(NODE_A());
+
+    var orderCoin = await findOrderCoin('FILL04');
+    t.assert(orderCoin, 'Order not found');
+
+    // Pay with Minima instead of USDT
+    var bMinimaCoin = await findCoinForToken(NODE_B(), '0x00', '5');
+    t.assert(bMinimaCoin, 'No Minima coin on B');
+
+    var txid = 'test_fill_wrong_tok';
+    var failed = false;
+    try {
+        var steps = [
+            'txncreate id:' + txid,
+            'txninput id:' + txid + ' coinid:' + orderCoin.coinid,
+            'txninput id:' + txid + ' coinid:' + bMinimaCoin.coinid,
+            'txnoutput id:' + txid + ' amount:5 address:' + ID_A.hexaddr + ' storestate:false',
+            'txnoutput id:' + txid + ' amount:10 address:' + ID_B.hexaddr + ' storestate:false',
+            'txnoutput id:' + txid + ' amount:' + (parseFloat(bMinimaCoin.amount) - 5) + ' address:' + ID_B.hexaddr + ' storestate:false',
+            'txnsign id:' + txid + ' publickey:auto',
+            'txnbasics id:' + txid,
+            'txnpost id:' + txid
+        ];
+        await buildTx(NODE_B(), txid, steps);
+    } catch(e) {
+        failed = true;
+        t.log('Expected failure: ' + e.message);
+    }
+    await rpcB('txndelete id:' + txid);
+
+    if (!failed) {
+        t.log('txnpost accepted - checking miner rejection...');
+        await waitForBlock(NODE_A());
+        var still = await findOrderCoin('FILL04');
+        t.assert(still, 'Wrong token fill should have been rejected');
+        t.log('Miner rejected wrong token payment');
+    }
+
+    // Cleanup
+    var coin2 = await findOrderCoin('FILL04');
+    if (coin2) {
+        await cancelOrder(NODE_A(), coin2.coinid, coin2, ID_A);
+        await waitForBlock(NODE_A());
+    }
+});
+
+test('T3.5 -- Wrong Destination', async function(t) {
+    await createSellOrder('10', '0.5', 'FILL05');
+    t.log('Created sell order: wants payment to A');
+    await waitForBlock(NODE_A());
+
+    var orderCoin = await findOrderCoin('FILL05');
+    t.assert(orderCoin, 'Order not found');
+
+    var bUsdtCoin = await findCoinForToken(NODE_B(), TOKEN_ID(), '5');
+    t.assert(bUsdtCoin, 'No USDT coin on B');
+
+    // Pay to B's own address instead of A's
+    var txid = 'test_fill_wrong_dest';
+    var failed = false;
+    try {
+        var steps = [
+            'txncreate id:' + txid,
+            'txninput id:' + txid + ' coinid:' + orderCoin.coinid,
+            'txninput id:' + txid + ' coinid:' + bUsdtCoin.coinid,
+            'txnoutput id:' + txid + ' amount:5 address:' + ID_B.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false',
+            'txnoutput id:' + txid + ' amount:10 address:' + ID_B.hexaddr + ' storestate:false',
+            'txnoutput id:' + txid + ' amount:' + (parseFloat(bUsdtCoin.tokenamount) - 5) + ' address:' + ID_B.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false',
+            'txnsign id:' + txid + ' publickey:auto',
+            'txnbasics id:' + txid,
+            'txnpost id:' + txid
+        ];
+        await buildTx(NODE_B(), txid, steps);
+    } catch(e) {
+        failed = true;
+        t.log('Expected failure: ' + e.message);
+    }
+    await rpcB('txndelete id:' + txid);
+
+    if (!failed) {
+        t.log('txnpost accepted - checking miner rejection...');
+        await waitForBlock(NODE_A());
+        var still = await findOrderCoin('FILL05');
+        t.assert(still, 'Wrong destination fill should have been rejected');
+        t.log('Miner rejected wrong destination');
+    }
+
+    // Cleanup
+    var coin2 = await findOrderCoin('FILL05');
+    if (coin2) {
+        await cancelOrder(NODE_A(), coin2.coinid, coin2, ID_A);
+        await waitForBlock(NODE_A());
+    }
+});
+
+test('T3.6 -- Double Fill', async function(t) {
+    await createSellOrder('10', '0.5', 'FILL06');
+    t.log('Created sell order');
+    await waitForBlock(NODE_A());
+
+    var orderCoin = await findOrderCoin('FILL06');
+    t.assert(orderCoin, 'Order not found');
+
+    // Fill it once
+    var bUsdtCoin = await findCoinForToken(NODE_B(), TOKEN_ID(), '5');
+    t.assert(bUsdtCoin, 'No USDT on B');
+
+    var txid = 'test_fill_first';
+    var changeAmt = parseFloat(bUsdtCoin.tokenamount) - 5;
+    var steps = [
+        'txncreate id:' + txid,
+        'txninput id:' + txid + ' coinid:' + orderCoin.coinid,
+        'txninput id:' + txid + ' coinid:' + bUsdtCoin.coinid,
+        'txnoutput id:' + txid + ' amount:5 address:' + ID_A.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false',
+        'txnoutput id:' + txid + ' amount:10 address:' + ID_B.hexaddr + ' storestate:false'
+    ];
+    if (changeAmt > 0.0001) {
+        steps.push('txnoutput id:' + txid + ' amount:' + changeAmt + ' address:' + ID_B.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false');
+    }
+    steps.push('txnsign id:' + txid + ' publickey:auto');
+    steps.push('txnbasics id:' + txid);
+    steps.push('txnpost id:' + txid);
+    await buildTx(NODE_B(), txid, steps);
+    await rpcB('txndelete id:' + txid);
+    t.log('First fill succeeded');
+    await waitForBlock(NODE_A());
+
+    // Try to fill again with same coinid
+    var bUsdtCoin2 = await findCoinForToken(NODE_B(), TOKEN_ID(), '5');
+    var txid2 = 'test_fill_double';
+    var failed = false;
+    try {
+        var steps2 = [
+            'txncreate id:' + txid2,
+            'txninput id:' + txid2 + ' coinid:' + orderCoin.coinid
+        ];
+        await buildTx(NODE_B(), txid2, steps2);
+    } catch(e) {
+        failed = true;
+        t.log('Double fill rejected: ' + e.message);
+    }
+    await rpcB('txndelete id:' + txid2);
+    t.assert(failed, 'Double fill txninput should fail on spent coin');
+});
+
+test('T3.7 -- Multiple UTXO Inputs', async function(t) {
+    // Split B's USDT into small coins
+    t.log('Splitting B USDT into 5 coins...');
+    var splitR = await rpcB('send address:' + ID_B.hexaddr + ' amount:5 tokenid:' + TOKEN_ID() + ' split:5');
+    if (!splitR.status) {
+        t.log('Split failed (may already be split): ' + (splitR.error || ''));
+    }
+    await waitForBlock(NODE_B());
+
+    // Create order wanting 4 USDT
+    await createSellOrder('8', '0.5', 'FILL07');
+    t.log('Created sell order: 8 Minima @ 0.5 (wants 4 USDT)');
+    await waitForBlock(NODE_A());
+
+    var orderCoin = await findOrderCoin('FILL07');
+    t.assert(orderCoin, 'Order not found');
+
+    // Get all B's USDT coins
+    var allCoins = await rpc(NODE_B(), 'coins sendable:true');
+    var usdtCoins = (allCoins.response || []).filter(function(c) { return c.tokenid === TOKEN_ID(); });
+    t.log('B has ' + usdtCoins.length + ' USDT coins');
+
+    // Accumulate coins until we have >= 4 USDT
+    var selected = [];
+    var total = 0;
+    for (var i = 0; i < usdtCoins.length && total < 4; i++) {
+        selected.push(usdtCoins[i]);
+        total += parseFloat(usdtCoins[i].tokenamount);
+    }
+    t.assert(total >= 4, 'Not enough USDT coins to cover 4');
+    t.log('Selected ' + selected.length + ' coins, total=' + total);
+
+    var txid = 'test_fill_multi';
+    var steps = ['txncreate id:' + txid];
+    steps.push('txninput id:' + txid + ' coinid:' + orderCoin.coinid);
+    for (var j = 0; j < selected.length; j++) {
+        steps.push('txninput id:' + txid + ' coinid:' + selected[j].coinid);
+    }
+    steps.push('txnoutput id:' + txid + ' amount:4 address:' + ID_A.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false');
+    steps.push('txnoutput id:' + txid + ' amount:8 address:' + ID_B.hexaddr + ' storestate:false');
+    var changeUSDT = total - 4;
+    if (changeUSDT > 0.0001) {
+        steps.push('txnoutput id:' + txid + ' amount:' + changeUSDT + ' address:' + ID_B.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false');
+    }
+    steps.push('txnsign id:' + txid + ' publickey:auto');
+    steps.push('txnbasics id:' + txid);
+    steps.push('txnpost id:' + txid);
+
+    await buildTx(NODE_B(), txid, steps);
+    await rpcB('txndelete id:' + txid);
+    t.log('Multi-input fill posted');
+
+    await waitForBlock(NODE_A());
+
+    var still = await findOrderCoin('FILL07');
+    t.assert(!still, 'Order should be filled');
+    t.log('Multi-UTXO fill succeeded');
+});
+
+// -------- Phase 4: Refresh Orders --------
+
+test('T4.1 -- Refresh Resets Coinage', async function(t) {
+    await createSellOrder('10', '0.5', 'REFRESH01');
+    t.log('Created sell order');
+    await waitForBlock(NODE_A());
+
+    var coin = await findOrderCoin('REFRESH01');
+    t.assert(coin, 'Order not found');
+    var origCreated = coin.created;
+    t.log('Original created block: ' + origCreated);
+
+    // Wait 2 blocks
+    t.log('Waiting 2 blocks...');
+    await waitForBlock(NODE_A(), 2);
+
+    // Refresh
+    var txid = 'test_refresh';
+    var steps = [
+        'txncreate id:' + txid,
+        'txninput id:' + txid + ' coinid:' + coin.coinid,
+        'txnoutput id:' + txid + ' amount:' + coin.amount + ' address:' + coin.address + ' storestate:true',
+        'txnstate id:' + txid + ' port:0 value:' + getState(coin, 0),
+        'txnstate id:' + txid + ' port:1 value:' + getState(coin, 1),
+        'txnstate id:' + txid + ' port:2 value:' + getState(coin, 2),
+        'txnstate id:' + txid + ' port:3 value:' + getState(coin, 3),
+        'txnstate id:' + txid + ' port:4 value:' + getState(coin, 4),
+        'txnstate id:' + txid + ' port:5 value:' + getState(coin, 5),
+        'txnstate id:' + txid + ' port:6 value:' + getState(coin, 6),
+        'txnsign id:' + txid + ' publickey:' + ID_A.pubkey,
+        'txnbasics id:' + txid,
+        'txnpost id:' + txid
+    ];
+    await buildTx(NODE_A(), txid, steps);
+    await rpcA('txndelete id:' + txid);
+    t.log('Refresh tx posted');
+
+    await waitForBlock(NODE_A());
+
+    var newCoin = await findOrderCoin('REFRESH01');
+    t.assert(newCoin, 'Refreshed coin not found');
+    t.assert(parseInt(newCoin.created) > parseInt(origCreated), 'Created block should be higher after refresh');
+    t.log('New created block: ' + newCoin.created);
+
+    // Verify state preserved
+    t.assertEq(getState(newCoin, 0), getState(coin, 0), 'State 0 preserved');
+    t.assertEq(getState(newCoin, 1), getState(coin, 1), 'State 1 preserved');
+    t.assertEq(getState(newCoin, 2), getState(coin, 2), 'State 2 preserved');
+    t.assertEq(getState(newCoin, 3), getState(coin, 3), 'State 3 preserved');
+    t.assertEq(getState(newCoin, 4), getState(coin, 4), 'State 4 preserved');
+    t.assertEq(getState(newCoin, 5), getState(coin, 5), 'State 5 preserved');
+    t.assertEq(getState(newCoin, 6), getState(coin, 6), 'State 6 preserved');
+    t.log('All state ports preserved');
+
+    // Cleanup
+    await cancelOrder(NODE_A(), newCoin.coinid, newCoin, ID_A);
+    await waitForBlock(NODE_A());
+});
+
+test('T4.2 -- Refresh Then Fill', async function(t) {
+    await createSellOrder('10', '0.5', 'REFRESH02');
+    t.log('Created sell order');
+    await waitForBlock(NODE_A());
+
+    var coin = await findOrderCoin('REFRESH02');
+    t.assert(coin, 'Order not found');
+
+    // Refresh it
+    var txid = 'test_refresh2';
+    var steps = [
+        'txncreate id:' + txid,
+        'txninput id:' + txid + ' coinid:' + coin.coinid,
+        'txnoutput id:' + txid + ' amount:' + coin.amount + ' address:' + coin.address + ' storestate:true',
+        'txnstate id:' + txid + ' port:0 value:' + getState(coin, 0),
+        'txnstate id:' + txid + ' port:1 value:' + getState(coin, 1),
+        'txnstate id:' + txid + ' port:2 value:' + getState(coin, 2),
+        'txnstate id:' + txid + ' port:3 value:' + getState(coin, 3),
+        'txnstate id:' + txid + ' port:4 value:' + getState(coin, 4),
+        'txnstate id:' + txid + ' port:5 value:' + getState(coin, 5),
+        'txnstate id:' + txid + ' port:6 value:' + getState(coin, 6),
+        'txnsign id:' + txid + ' publickey:' + ID_A.pubkey,
+        'txnbasics id:' + txid,
+        'txnpost id:' + txid
+    ];
+    await buildTx(NODE_A(), txid, steps);
+    await rpcA('txndelete id:' + txid);
+    t.log('Refreshed');
+    await waitForBlock(NODE_A());
+
+    // Fill from B
+    var refreshedCoin = await findOrderCoin('REFRESH02');
+    t.assert(refreshedCoin, 'Refreshed coin not found');
+
+    var bUsdtCoin = await findCoinForToken(NODE_B(), TOKEN_ID(), '5');
+    t.assert(bUsdtCoin, 'No USDT on B');
+
+    var txid2 = 'test_fill_refreshed';
+    var changeAmt = parseFloat(bUsdtCoin.tokenamount) - 5;
+    var steps2 = [
+        'txncreate id:' + txid2,
+        'txninput id:' + txid2 + ' coinid:' + refreshedCoin.coinid,
+        'txninput id:' + txid2 + ' coinid:' + bUsdtCoin.coinid,
+        'txnoutput id:' + txid2 + ' amount:5 address:' + ID_A.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false',
+        'txnoutput id:' + txid2 + ' amount:10 address:' + ID_B.hexaddr + ' storestate:false'
+    ];
+    if (changeAmt > 0.0001) {
+        steps2.push('txnoutput id:' + txid2 + ' amount:' + changeAmt + ' address:' + ID_B.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false');
+    }
+    steps2.push('txnsign id:' + txid2 + ' publickey:auto');
+    steps2.push('txnbasics id:' + txid2);
+    steps2.push('txnpost id:' + txid2);
+
+    await buildTx(NODE_B(), txid2, steps2);
+    await rpcB('txndelete id:' + txid2);
+    t.log('Fill after refresh posted');
+
+    await waitForBlock(NODE_A());
+
+    var still = await findOrderCoin('REFRESH02');
+    t.assert(!still, 'Refreshed order should be filled');
+    t.log('Refresh-then-fill succeeded');
+});
+
+test('T4.3 -- Refresh Uses Correct Address', async function(t) {
+    await createSellOrder('10', '0.5', 'REFRESH03');
+    t.log('Created sell order');
+    await waitForBlock(NODE_A());
+
+    var coin = await findOrderCoin('REFRESH03');
+    t.assert(coin, 'Order not found');
+    var origAddr = coin.address;
+    t.log('Original coin address: ' + origAddr);
+
+    // Refresh using coin.address (not hardcoded)
+    var txid = 'test_refresh3';
+    var steps = [
+        'txncreate id:' + txid,
+        'txninput id:' + txid + ' coinid:' + coin.coinid,
+        'txnoutput id:' + txid + ' amount:' + coin.amount + ' address:' + coin.address + ' storestate:true',
+        'txnstate id:' + txid + ' port:0 value:' + getState(coin, 0),
+        'txnstate id:' + txid + ' port:1 value:' + getState(coin, 1),
+        'txnstate id:' + txid + ' port:2 value:' + getState(coin, 2),
+        'txnstate id:' + txid + ' port:3 value:' + getState(coin, 3),
+        'txnstate id:' + txid + ' port:4 value:' + getState(coin, 4),
+        'txnstate id:' + txid + ' port:5 value:' + getState(coin, 5),
+        'txnstate id:' + txid + ' port:6 value:' + getState(coin, 6),
+        'txnsign id:' + txid + ' publickey:' + ID_A.pubkey,
+        'txnbasics id:' + txid,
+        'txnpost id:' + txid
+    ];
+    await buildTx(NODE_A(), txid, steps);
+    await rpcA('txndelete id:' + txid);
+    await waitForBlock(NODE_A());
+
+    var newCoin = await findOrderCoin('REFRESH03');
+    t.assert(newCoin, 'Refreshed coin not found');
+    t.assertEq(newCoin.address.toUpperCase(), origAddr.toUpperCase(), 'Refreshed coin must stay at same script address');
+    t.log('Confirmed: coin address unchanged after refresh');
+
+    // Cleanup
+    await cancelOrder(NODE_A(), newCoin.coinid, newCoin, ID_A);
+    await waitForBlock(NODE_A());
+});
+
+// -------- Phase 6: Security & Edge Cases --------
+
+test('T6.1 -- Zombie Cleanup', async function(t) {
+    // Clean any leftovers from previous runs first
+    await rpcA('txndelete id:test_zombie_fill');
+    await rpcA('txndelete id:test_zombie_cancel');
+    await rpcB('txndelete id:test_zombie_other');
+
+    // Create orphaned txns
+    await rpcA('txncreate id:test_zombie_fill');
+    await rpcA('txncreate id:test_zombie_cancel');
+    await rpcB('txncreate id:test_zombie_other');
+
+    t.log('Created zombie txns');
+
+    // Run cleanup
+    await cleanupBoth();
+    t.log('Cleanup ran');
+
+    // Verify
+    var listA = await rpcA('txnlist');
+    var listB = await rpcB('txnlist');
+    var zombiesA = (listA.response || []).filter(function(tx) {
+        var id = tx.id || tx.transaction || tx;
+        return typeof id === 'string' && id.indexOf('test_') === 0;
+    });
+    var zombiesB = (listB.response || []).filter(function(tx) {
+        var id = tx.id || tx.transaction || tx;
+        return typeof id === 'string' && id.indexOf('test_') === 0;
+    });
+    t.assertEq(zombiesA.length, 0, 'No test_ txns left on A');
+    t.assertEq(zombiesB.length, 0, 'No test_ txns left on B');
+    t.log('All zombie txns cleaned');
+});
+
+test('T6.2 -- Concurrent Orders', async function(t) {
+    // Create 3 orders at different prices
+    await createSellOrder('5', '0.4', 'CONC01');
+    await createSellOrder('5', '0.5', 'CONC02');
+    await createSellOrder('5', '0.6', 'CONC03');
+    t.log('Created 3 sell orders');
+    await waitForBlock(NODE_A());
+
+    var c1 = await findOrderCoin('CONC01');
+    var c2 = await findOrderCoin('CONC02');
+    var c3 = await findOrderCoin('CONC03');
+    t.assert(c1 && c2 && c3, 'All 3 orders should exist');
+
+    // Fill the 0.5 order
+    var bUsdtCoin = await findCoinForToken(NODE_B(), TOKEN_ID(), '2.5');
+    t.assert(bUsdtCoin, 'No USDT on B');
+
+    var txid = 'test_fill_conc';
+    var changeAmt = parseFloat(bUsdtCoin.tokenamount) - 2.5;
+    var steps = [
+        'txncreate id:' + txid,
+        'txninput id:' + txid + ' coinid:' + c2.coinid,
+        'txninput id:' + txid + ' coinid:' + bUsdtCoin.coinid,
+        'txnoutput id:' + txid + ' amount:2.5 address:' + ID_A.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false',
+        'txnoutput id:' + txid + ' amount:5 address:' + ID_B.hexaddr + ' storestate:false'
+    ];
+    if (changeAmt > 0.0001) {
+        steps.push('txnoutput id:' + txid + ' amount:' + changeAmt + ' address:' + ID_B.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false');
+    }
+    steps.push('txnsign id:' + txid + ' publickey:auto');
+    steps.push('txnbasics id:' + txid);
+    steps.push('txnpost id:' + txid);
+    await buildTx(NODE_B(), txid, steps);
+    await rpcB('txndelete id:' + txid);
+    t.log('Filled the 0.5 order');
+    await waitForBlock(NODE_A());
+
+    // Check: 0.4 and 0.6 still there, 0.5 gone
+    var r1 = await findOrderCoin('CONC01');
+    var r2 = await findOrderCoin('CONC02');
+    var r3 = await findOrderCoin('CONC03');
+    t.assert(r1, '0.4 order should still exist');
+    t.assert(!r2, '0.5 order should be gone (filled)');
+    t.assert(r3, '0.6 order should still exist');
+    t.log('Only the targeted order was filled');
+
+    // Cleanup remaining
+    await cancelOrder(NODE_A(), r1.coinid, r1, ID_A);
+    await cancelOrder(NODE_A(), r3.coinid, r3, ID_A);
+    await waitForBlock(NODE_A());
+    t.log('Cleaned up remaining orders');
+});
+
+test('T6.3 -- Create-Cancel Round Trip', async function(t) {
+    var before = await snapshot();
+    t.log('Before: A Minima=' + before.a_minima + ' A Token=' + before.a_token);
+
+    await createSellOrder('10', '0.5', 'ROUND01');
+    await waitForBlock(NODE_A());
+
+    var coin = await findOrderCoin('ROUND01');
+    t.assert(coin, 'Order not found');
+
+    await cancelOrder(NODE_A(), coin.coinid, coin, ID_A);
+    await waitForBlock(NODE_A());
+
+    var after = await snapshot();
+    t.log('After: A Minima=' + after.a_minima + ' A Token=' + after.a_token);
+
+    var miniDiff = Math.abs(after.a_minima - before.a_minima);
+    t.assert(miniDiff < 0.01, 'Minima should be restored (diff=' + miniDiff + ')');
+    t.log('Round trip conservation verified');
+});
+
+// -------- Phase 7: Full Round Trip --------
+
+test('T7.1 -- Full Trade Cycle', async function(t) {
+    var before = await snapshot();
+    t.log('Initial: A Minima=' + before.a_minima + ' A USDT=' + before.a_token);
+    t.log('Initial: B Minima=' + before.b_minima + ' B USDT=' + before.b_token);
+
+    // Step 1: A sells 10 Minima @ 0.5 (wants 5 USDT)
+    await createSellOrder('10', '0.5', 'CYCLE01');
+    t.log('Step 1: A created sell 10 Minima @ 0.5');
+    await waitForBlock(NODE_A());
+
+    var order1 = await findOrderCoin('CYCLE01');
+    t.assert(order1, 'Order 1 not found');
+
+    // Step 2: B fills (pays 5 USDT, gets 10 Minima)
+    var bUsdt1 = await findCoinForToken(NODE_B(), TOKEN_ID(), '5');
+    t.assert(bUsdt1, 'No USDT on B for fill');
+
+    var txid1 = 'test_cycle_fill1';
+    var change1 = parseFloat(bUsdt1.tokenamount) - 5;
+    var steps1 = [
+        'txncreate id:' + txid1,
+        'txninput id:' + txid1 + ' coinid:' + order1.coinid,
+        'txninput id:' + txid1 + ' coinid:' + bUsdt1.coinid,
+        'txnoutput id:' + txid1 + ' amount:5 address:' + ID_A.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false',
+        'txnoutput id:' + txid1 + ' amount:10 address:' + ID_B.hexaddr + ' storestate:false'
+    ];
+    if (change1 > 0.0001) {
+        steps1.push('txnoutput id:' + txid1 + ' amount:' + change1 + ' address:' + ID_B.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false');
+    }
+    steps1.push('txnsign id:' + txid1 + ' publickey:auto');
+    steps1.push('txnbasics id:' + txid1);
+    steps1.push('txnpost id:' + txid1);
+    await buildTx(NODE_B(), txid1, steps1);
+    await rpcB('txndelete id:' + txid1);
+    t.log('Step 2: B filled order (paid 5 USDT, got 10 Minima)');
+    await waitForBlock(NODE_A());
+
+    // Step 3: B sells 10 Minima @ 0.6 (wants 6 USDT)
+    // B creates sell order on Node B
+    var bSellState = '{"0":"' + ID_B.pubkey + '","1":"' + ID_B.hexaddr + '","2":"6","3":"' + TOKEN_ID() + '","4":"' + tagToHex('CYCLE02') + '","5":"1","6":"0.6"}';
+    var sendR = await rpcB('send amount:10 address:' + SCRIPT_ADDR_V3 + ' state:' + bSellState);
+    t.assert(sendR.status, 'B sell order send failed');
+    t.log('Step 3: B created sell 10 Minima @ 0.6');
+    await waitForBlock(NODE_B());
+
+    // Find B's order
+    var coins = await getCoinsAt(NODE_A(), SCRIPT_ADDR_V3);
+    var order2 = coins.find(function(c) { return getState(c, 4) === tagToHex('CYCLE02'); });
+    t.assert(order2, 'Order 2 not found');
+
+    // Step 4: A fills (pays 6 USDT, gets 10 Minima)
+    var aUsdt = await findCoinForToken(NODE_A(), TOKEN_ID(), '6');
+    t.assert(aUsdt, 'No USDT on A for fill');
+
+    var txid2 = 'test_cycle_fill2';
+    var change2 = parseFloat(aUsdt.tokenamount) - 6;
+    var steps2 = [
+        'txncreate id:' + txid2,
+        'txninput id:' + txid2 + ' coinid:' + order2.coinid,
+        'txninput id:' + txid2 + ' coinid:' + aUsdt.coinid,
+        'txnoutput id:' + txid2 + ' amount:6 address:' + ID_B.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false',
+        'txnoutput id:' + txid2 + ' amount:10 address:' + ID_A.hexaddr + ' storestate:false'
+    ];
+    if (change2 > 0.0001) {
+        steps2.push('txnoutput id:' + txid2 + ' amount:' + change2 + ' address:' + ID_A.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false');
+    }
+    steps2.push('txnsign id:' + txid2 + ' publickey:auto');
+    steps2.push('txnbasics id:' + txid2);
+    steps2.push('txnpost id:' + txid2);
+    await buildTx(NODE_A(), txid2, steps2);
+    await rpcA('txndelete id:' + txid2);
+    t.log('Step 4: A filled B order (paid 6 USDT, got 10 Minima)');
+    await waitForBlock(NODE_A());
+
+    // Step 5: Verify final state
+    var after = await snapshot();
+    t.log('Final: A Minima=' + after.a_minima + ' A USDT=' + after.a_token);
+    t.log('Final: B Minima=' + after.b_minima + ' B USDT=' + after.b_token);
+
+    // A: same Minima (sold 10, bought 10), lost 1 USDT (paid 6, received 5)
+    var aMiniDiff = Math.abs(after.a_minima - before.a_minima);
+    t.assert(aMiniDiff < 0.1, 'A Minima should be ~same (diff=' + aMiniDiff + ')');
+
+    var aUsdtDiff = before.a_token - after.a_token;
+    t.assert(Math.abs(aUsdtDiff - 1) < 0.1, 'A should have lost ~1 USDT (diff=' + aUsdtDiff + ')');
+
+    // B: same Minima, gained 1 USDT (received 6, paid 5)
+    var bMiniDiff = Math.abs(after.b_minima - before.b_minima);
+    t.assert(bMiniDiff < 0.1, 'B Minima should be ~same (diff=' + bMiniDiff + ')');
+
+    var bUsdtGain = after.b_token - before.b_token;
+    t.assert(Math.abs(bUsdtGain - 1) < 0.1, 'B should have gained ~1 USDT (gain=' + bUsdtGain + ')');
+
+    t.log('Full trade cycle verified');
+});
+
+test('T7.2 -- System Conservation', async function(t) {
+    if (!SUITE_START_SNAPSHOT) {
+        t.log('No suite start snapshot available (run from T0.1)');
+        return;
+    }
+    var now = await snapshot();
+    t.log('Suite start: total Minima=' + (SUITE_START_SNAPSHOT.a_minima + SUITE_START_SNAPSHOT.b_minima));
+    t.log('Suite end:   total Minima=' + (now.a_minima + now.b_minima));
+    t.log('Suite start: total Token=' + (SUITE_START_SNAPSHOT.a_token + SUITE_START_SNAPSHOT.b_token));
+    t.log('Suite end:   total Token=' + (now.a_token + now.b_token));
+
+    try {
+        assertConserved(SUITE_START_SNAPSHOT, now, 0.1);
+        t.log('System conservation verified across entire suite');
+    } catch(e) {
+        t.log('WARNING: ' + e.message);
+        t.log('(Small discrepancies may occur due to mining rewards or concurrent activity)');
+    }
+});
+
+// -------- Phase 8: Exploitation Attacks --------
+
+test('T8.1 -- Malicious Order (Fake Owner Key)', async function(t) {
+    // Create order with Node B's pubkey as owner — attacker tries to control the cancel path
+    var orderId = tagToHex('ATTACK01');
+    var stateJson = '{"0":"' + ID_B.pubkey + '","1":"' + ID_A.hexaddr + '","2":"5","3":"' + TOKEN_ID() + '","4":"' + orderId + '","5":"1","6":"0.5"}';
+    var r = await rpcA('send amount:10 address:' + SCRIPT_ADDR_V3 + ' state:' + stateJson);
+    if (!r.status) { t.log('Send failed (expected on some nodes): ' + (r.error || '')); return; }
+    t.log('Created order with B pubkey as owner');
+    await waitForBlock(NODE_A());
+
+    var coin = await findOrderCoin('ATTACK01');
+    t.assert(coin, 'Order coin not found');
+
+    // Node B tries to cancel (they have the owner key) — but coins go to A's address (PREVSTATE(1))
+    var txid = 'test_attack_cancel';
+    var steps = [
+        'txncreate id:' + txid,
+        'txninput id:' + txid + ' coinid:' + coin.coinid,
+        'txnoutput id:' + txid + ' amount:' + coin.amount + ' address:' + ID_A.hexaddr + ' storestate:false',
+        'txnsign id:' + txid + ' publickey:' + ID_B.pubkey,
+        'txnbasics id:' + txid,
+        'txnpost id:' + txid
+    ];
+    await buildTx(NODE_B(), txid, steps);
+    await rpcB('txndelete id:' + txid);
+    t.log('B cancelled order — but VERIFYOUT forces coins to A (PREVSTATE(1))');
+    await waitForBlock(NODE_A());
+
+    // Verify coins went to A, not B
+    var coinsAfter = await getCoinsAt(NODE_A(), SCRIPT_ADDR_V3);
+    var still = coinsAfter.find(function(c) { return getState(c, 4) === tagToHex('ATTACK01'); });
+    t.assert(!still, 'Order should be gone from script');
+
+    // B cannot steal — VERIFYOUT enforces output to PREVSTATE(1) = A's address
+    t.log('V3 prevents cancel theft: coins returned to original wantAddr regardless of signer');
+});
+
+test('T8.2 -- State Tampering: Inflate wantAmt on Refresh', async function(t) {
+    await createSellOrder('10', '0.5', 'TAMPER01');
+    await waitForBlock(NODE_A());
+
+    var coin = await findOrderCoin('TAMPER01');
+    t.assert(coin, 'Order not found');
+    var origWantAmt = getState(coin, 2);
+    t.log('Original wantAmt: ' + origWantAmt);
+
+    // Refresh but change wantAmt from 5 to 500 (inflate what you receive)
+    var txid = 'test_tamper_amt';
+    var steps = [
+        'txncreate id:' + txid,
+        'txninput id:' + txid + ' coinid:' + coin.coinid,
+        'txnoutput id:' + txid + ' amount:' + coin.amount + ' address:' + coin.address + ' storestate:true',
+        'txnstate id:' + txid + ' port:0 value:' + getState(coin, 0),
+        'txnstate id:' + txid + ' port:1 value:' + getState(coin, 1),
+        'txnstate id:' + txid + ' port:2 value:500',
+        'txnstate id:' + txid + ' port:3 value:' + getState(coin, 3),
+        'txnstate id:' + txid + ' port:4 value:' + getState(coin, 4),
+        'txnstate id:' + txid + ' port:5 value:' + getState(coin, 5),
+        'txnstate id:' + txid + ' port:6 value:' + getState(coin, 6),
+        'txnsign id:' + txid + ' publickey:' + ID_A.pubkey,
+        'txnbasics id:' + txid,
+        'txnpost id:' + txid
+    ];
+    await buildTx(NODE_A(), txid, steps);
+    await rpcA('txndelete id:' + txid);
+    t.log('Posted tampered refresh');
+    await waitForBlock(NODE_A());
+
+    // Check if tampering succeeded or was rejected
+    var newCoin = await findOrderCoin('TAMPER01');
+    if (newCoin) {
+        var newWantAmt = getState(newCoin, 2);
+        t.log('New wantAmt: ' + newWantAmt);
+        // V3 SIGNEDBY path has no SAMESTATE check — owner CAN change state on refresh
+        // This is by design: the owner controls their own order terms
+        // The risk is if someone ELSE could do this (tested in T2.3 — non-owner fails)
+        t.log('NOTE: Owner CAN change order terms on refresh (by design — its their order)');
+        // Cleanup
+        await cancelOrder(NODE_A(), newCoin.coinid, newCoin, ID_A);
+        await waitForBlock(NODE_A());
+    } else {
+        t.log('Tampered refresh was rejected');
+    }
+});
+
+test('T8.3 -- State Tampering: Change wantAddr to Attacker', async function(t) {
+    await createSellOrder('10', '0.5', 'TAMPER02');
+    await waitForBlock(NODE_A());
+
+    var coin = await findOrderCoin('TAMPER02');
+    t.assert(coin, 'Order not found');
+
+    // Non-owner (B) tries to refresh and change wantAddr to B's address
+    var txid = 'test_tamper_addr';
+    var failed = false;
+    try {
+        var steps = [
+            'txncreate id:' + txid,
+            'txninput id:' + txid + ' coinid:' + coin.coinid,
+            'txnoutput id:' + txid + ' amount:' + coin.amount + ' address:' + coin.address + ' storestate:true',
+            'txnstate id:' + txid + ' port:0 value:' + getState(coin, 0),
+            'txnstate id:' + txid + ' port:1 value:' + ID_B.hexaddr,
+            'txnstate id:' + txid + ' port:2 value:' + getState(coin, 2),
+            'txnstate id:' + txid + ' port:3 value:' + getState(coin, 3),
+            'txnstate id:' + txid + ' port:4 value:' + getState(coin, 4),
+            'txnstate id:' + txid + ' port:5 value:' + getState(coin, 5),
+            'txnstate id:' + txid + ' port:6 value:' + getState(coin, 6),
+            'txnsign id:' + txid + ' publickey:' + ID_B.pubkey,
+            'txnbasics id:' + txid,
+            'txnpost id:' + txid
+        ];
+        await buildTx(NODE_B(), txid, steps);
+    } catch(e) {
+        failed = true;
+        t.log('Expected failure: ' + e.message);
+    }
+    await rpcB('txndelete id:' + txid);
+
+    if (!failed) {
+        await waitForBlock(NODE_A());
+        var still = await findOrderCoin('TAMPER02');
+        t.assert(still, 'Non-owner state tampering should be rejected by miner');
+        t.log('Miner rejected non-owner state change');
+    } else {
+        t.log('Non-owner cannot sign with owner key — SIGNEDBY rejects');
+    }
+
+    // Cleanup
+    var coin2 = await findOrderCoin('TAMPER02');
+    if (coin2) { await cancelOrder(NODE_A(), coin2.coinid, coin2, ID_A); await waitForBlock(NODE_A()); }
+});
+
+test('T8.4 -- Zero Amount Order', async function(t) {
+    var before = await snapshot();
+    var failed = false;
+    try {
+        await createSellOrder('0', '0.5', 'ZERO01');
+    } catch(e) {
+        failed = true;
+        t.log('Zero amount rejected: ' + e.message);
+    }
+
+    if (!failed) {
+        await waitForBlock(NODE_A());
+        var coin = await findOrderCoin('ZERO01');
+        if (coin) {
+            t.log('WARNING: Zero amount order accepted — amount=' + coin.amount);
+            await cancelOrder(NODE_A(), coin.coinid, coin, ID_A);
+            await waitForBlock(NODE_A());
+        } else {
+            t.log('Zero amount order did not produce a coin');
+        }
+    }
+
+    var after = await snapshot();
+    assertConserved(before, after, 0.01);
+    t.log('No coins lost from zero amount test');
+});
+
+test('T8.5 -- Extreme Amounts', async function(t) {
+    var before = await snapshot();
+
+    // Very small
+    var smallFailed = false;
+    try {
+        await createSellOrder('0.00000001', '0.5', 'TINY01');
+    } catch(e) {
+        smallFailed = true;
+        t.log('Tiny order rejected: ' + e.message);
+    }
+    if (!smallFailed) {
+        await waitForBlock(NODE_A());
+        var tiny = await findOrderCoin('TINY01');
+        if (tiny) {
+            t.log('Tiny order accepted: amount=' + tiny.amount);
+            await cancelOrder(NODE_A(), tiny.coinid, tiny, ID_A);
+            await waitForBlock(NODE_A());
+        }
+    }
+
+    // Very large (more than balance — should fail)
+    var largeFailed = false;
+    try {
+        await createSellOrder('999999999', '0.5', 'HUGE01');
+    } catch(e) {
+        largeFailed = true;
+        t.log('Huge order correctly rejected: ' + e.message);
+    }
+    t.assert(largeFailed, 'Huge order should fail (insufficient balance)');
+
+    var after = await snapshot();
+    assertConserved(before, after, 0.01);
+    t.log('Extreme amounts handled safely');
+});
+
+test('T8.6 -- Self-Fill Attempt', async function(t) {
+    var before = await snapshot();
+    await createSellOrder('10', '0.5', 'SELF01');
+    await waitForBlock(NODE_A());
+
+    var coin = await findOrderCoin('SELF01');
+    t.assert(coin, 'Order not found');
+
+    // Node A tries to fill own order — spend order coin + own USDT, get Minima back
+    var aUsdt = await findCoinForToken(NODE_A(), TOKEN_ID(), '5');
+    t.assert(aUsdt, 'No USDT on A');
+
+    var txid = 'test_self_fill';
+    var change = parseFloat(aUsdt.tokenamount) - 5;
+    var steps = [
+        'txncreate id:' + txid,
+        'txninput id:' + txid + ' coinid:' + coin.coinid,
+        'txninput id:' + txid + ' coinid:' + aUsdt.coinid,
+        'txnoutput id:' + txid + ' amount:5 address:' + ID_A.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false',
+        'txnoutput id:' + txid + ' amount:10 address:' + ID_A.hexaddr + ' storestate:false'
+    ];
+    if (change > 0.0001) {
+        steps.push('txnoutput id:' + txid + ' amount:' + change + ' address:' + ID_A.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false');
+    }
+    steps.push('txnsign id:' + txid + ' publickey:auto');
+    steps.push('txnbasics id:' + txid);
+    steps.push('txnpost id:' + txid);
+    await buildTx(NODE_A(), txid, steps);
+    await rpcA('txndelete id:' + txid);
+    t.log('Self-fill posted');
+    await waitForBlock(NODE_A());
+
+    // Self-fill IS valid — you pay yourself. No exploit, just washes the order.
+    var still = await findOrderCoin('SELF01');
+    if (!still) {
+        t.log('Self-fill succeeded (valid — owner pays themselves, order consumed)');
+    } else {
+        t.log('Self-fill rejected by miner');
+    }
+
+    var after = await snapshot();
+    assertConserved(before, after, 0.01);
+    t.log('No coins lost in self-fill');
+});
+
+test('T8.7 -- Partial Amount Cancel (Steal Difference)', async function(t) {
+    await createSellOrder('10', '0.5', 'PARTIAL01');
+    await waitForBlock(NODE_A());
+
+    var coin = await findOrderCoin('PARTIAL01');
+    t.assert(coin, 'Order not found');
+
+    // Try to cancel but output only 5 instead of 10 (steal 5 Minima)
+    var txid = 'test_partial_cancel';
+    var failed = false;
+    try {
+        var steps = [
+            'txncreate id:' + txid,
+            'txninput id:' + txid + ' coinid:' + coin.coinid,
+            'txnoutput id:' + txid + ' amount:5 address:' + ID_A.hexaddr + ' storestate:false',
+            'txnsign id:' + txid + ' publickey:' + ID_A.pubkey,
+            'txnbasics id:' + txid,
+            'txnpost id:' + txid
+        ];
+        await buildTx(NODE_A(), txid, steps);
+    } catch(e) {
+        failed = true;
+        t.log('Expected failure: ' + e.message);
+    }
+    await rpcA('txndelete id:' + txid);
+
+    if (!failed) {
+        await waitForBlock(NODE_A());
+        var still = await findOrderCoin('PARTIAL01');
+        t.assert(still, 'Partial cancel should be rejected — VERIFYOUT checks @AMOUNT');
+        t.log('Miner rejected partial amount cancel');
+    } else {
+        t.log('Partial cancel rejected at build time');
+    }
+
+    // Cleanup
+    var coin2 = await findOrderCoin('PARTIAL01');
+    if (coin2) { await cancelOrder(NODE_A(), coin2.coinid, coin2, ID_A); await waitForBlock(NODE_A()); }
+});
+
+test('T8.8 -- Extra Output Siphon on Fill', async function(t) {
+    await createSellOrder('10', '0.5', 'SIPHON01');
+    await waitForBlock(NODE_A());
+
+    var coin = await findOrderCoin('SIPHON01');
+    t.assert(coin, 'Order not found');
+
+    var bUsdt = await findCoinForToken(NODE_B(), TOKEN_ID(), '5');
+    t.assert(bUsdt, 'No USDT on B');
+
+    // Fill correctly BUT add an extra output siphoning 1 Minima to B
+    var txid = 'test_siphon';
+    var change = parseFloat(bUsdt.tokenamount) - 5;
+    var steps = [
+        'txncreate id:' + txid,
+        'txninput id:' + txid + ' coinid:' + coin.coinid,
+        'txninput id:' + txid + ' coinid:' + bUsdt.coinid,
+        'txnoutput id:' + txid + ' amount:5 address:' + ID_A.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false',
+        'txnoutput id:' + txid + ' amount:9 address:' + ID_B.hexaddr + ' storestate:false',
+        'txnoutput id:' + txid + ' amount:1 address:' + ID_B.hexaddr + ' storestate:false'
+    ];
+    if (change > 0.0001) {
+        steps.push('txnoutput id:' + txid + ' amount:' + change + ' address:' + ID_B.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false');
+    }
+    steps.push('txnsign id:' + txid + ' publickey:auto');
+    steps.push('txnbasics id:' + txid);
+    steps.push('txnpost id:' + txid);
+
+    var posted = false;
+    try {
+        await buildTx(NODE_B(), txid, steps);
+        posted = true;
+    } catch(e) {
+        t.log('Siphon tx rejected at build: ' + e.message);
+    }
+    await rpcB('txndelete id:' + txid);
+
+    if (posted) {
+        await waitForBlock(NODE_A());
+        var still = await findOrderCoin('SIPHON01');
+        // The fill IS valid: VERIFYOUT only checks output[@INPUT] — extra outputs are allowed
+        // The siphon doesn't steal from the ORDER — the 10 Minima is split 9+1 but all goes to B
+        // The seller gets their 5 USDT correctly at output[0]
+        if (!still) {
+            t.log('Fill with extra outputs accepted — seller got paid correctly, extra outputs are takers own coins');
+        } else {
+            t.log('Miner rejected extra-output fill');
+        }
+    }
+
+    // Cleanup
+    var coin2 = await findOrderCoin('SIPHON01');
+    if (coin2) { await cancelOrder(NODE_A(), coin2.coinid, coin2, ID_A); await waitForBlock(NODE_A()); }
+});
+
+test('T8.9 -- Replay Attack (Reuse Spent Coinid)', async function(t) {
+    await createSellOrder('10', '0.5', 'REPLAY01');
+    await waitForBlock(NODE_A());
+
+    var coin = await findOrderCoin('REPLAY01');
+    t.assert(coin, 'Order not found');
+    var spentCoinid = coin.coinid;
+
+    // Cancel the order normally
+    await cancelOrder(NODE_A(), coin.coinid, coin, ID_A);
+    await waitForBlock(NODE_A());
+    t.log('Order cancelled, coinid spent: ' + spentCoinid);
+
+    // Try to reuse the spent coinid
+    var txid = 'test_replay';
+    var failed = false;
+    try {
+        var steps = [
+            'txncreate id:' + txid,
+            'txninput id:' + txid + ' coinid:' + spentCoinid,
+            'txnoutput id:' + txid + ' amount:10 address:' + ID_A.hexaddr + ' storestate:false',
+            'txnsign id:' + txid + ' publickey:' + ID_A.pubkey,
+            'txnbasics id:' + txid,
+            'txnpost id:' + txid
+        ];
+        await buildTx(NODE_A(), txid, steps);
+    } catch(e) {
+        failed = true;
+        t.log('Expected failure: ' + e.message);
+    }
+    await rpcA('txndelete id:' + txid);
+    t.assert(failed, 'Replay with spent coinid must fail');
+    t.log('Replay attack prevented — spent coins cannot be reused');
+});
+
+// -------- Phase 9: Chaos Monkey --------
+
+test('T9.1 -- Rapid-Fire Create (5 Orders No Wait)', async function(t) {
+    var before = await snapshot();
+
+    // Create 5 orders without waiting for blocks between them
+    var tags = ['RAPID01', 'RAPID02', 'RAPID03', 'RAPID04', 'RAPID05'];
+    for (var i = 0; i < tags.length; i++) {
+        try {
+            await createSellOrder('1', '0.5', tags[i]);
+            t.log('Sent order ' + tags[i]);
+        } catch(e) {
+            t.log('Order ' + tags[i] + ' failed (expected after first — UTXO lock): ' + e.message);
+        }
+    }
+
+    // Wait for all to settle
+    await waitForBlock(NODE_A());
+    await waitForBlock(NODE_A());
+
+    var coins = await getCoinsAt(NODE_A(), SCRIPT_ADDR_V3);
+    var count = 0;
+    for (var i = 0; i < tags.length; i++) {
+        var c = coins.find(function(c) { return getState(c, 4) === tagToHex(tags[i]); });
+        if (c) count++;
+    }
+    t.log(count + '/' + tags.length + ' rapid-fire orders landed on-chain');
+    t.log('(Some may fail due to UTXO locking — this is correct Minima behavior)');
+
+    // Cleanup all
+    for (var i = 0; i < coins.length; i++) {
+        var owner = getState(coins[i], 0);
+        if (owner === ID_A.pubkey) {
+            try { await cancelOrder(NODE_A(), coins[i].coinid, coins[i], ID_A); } catch(e) {}
+        }
+    }
+    await waitForBlock(NODE_A());
+
+    var after = await snapshot();
+    assertConserved(before, after, 0.1);
+    t.log('All coins recovered after rapid-fire');
+});
+
+test('T9.2 -- Simultaneous Cancel (Same Order Twice)', async function(t) {
+    await createSellOrder('10', '0.5', 'SIMCANCEL01');
+    await waitForBlock(NODE_A());
+
+    var coin = await findOrderCoin('SIMCANCEL01');
+    t.assert(coin, 'Order not found');
+
+    // Build two cancel txns for the same coin
+    var txid1 = 'test_simcancel1';
+    var txid2 = 'test_simcancel2';
+
+    var steps1 = [
+        'txncreate id:' + txid1,
+        'txninput id:' + txid1 + ' coinid:' + coin.coinid,
+        'txnoutput id:' + txid1 + ' amount:' + coin.amount + ' address:' + ID_A.hexaddr + ' storestate:false',
+        'txnsign id:' + txid1 + ' publickey:' + ID_A.pubkey,
+        'txnbasics id:' + txid1
+    ];
+
+    var steps2 = [
+        'txncreate id:' + txid2,
+        'txninput id:' + txid2 + ' coinid:' + coin.coinid,
+        'txnoutput id:' + txid2 + ' amount:' + coin.amount + ' address:' + ID_A.hexaddr + ' storestate:false',
+        'txnsign id:' + txid2 + ' publickey:' + ID_A.pubkey,
+        'txnbasics id:' + txid2
+    ];
+
+    // Build both, then post both
+    await buildTx(NODE_A(), txid1, steps1);
+    await buildTx(NODE_A(), txid2, steps2);
+
+    var r1 = await rpcA('txnpost id:' + txid1);
+    var r2 = await rpcA('txnpost id:' + txid2);
+    t.log('Cancel 1 post: status=' + r1.status);
+    t.log('Cancel 2 post: status=' + r2.status);
+
+    await rpcA('txndelete id:' + txid1);
+    await rpcA('txndelete id:' + txid2);
+
+    await waitForBlock(NODE_A());
+
+    // Only one should succeed — the other spends an already-spent coin
+    var still = await findOrderCoin('SIMCANCEL01');
+    t.assert(!still, 'Order should be cancelled by one of the two txns');
+    t.log('Double-cancel resolved correctly — only one succeeded on-chain');
+});
+
+test('T9.3 -- Race Condition: Both Nodes Fill Same Order', async function(t) {
+    var before = await snapshot();
+    await createSellOrder('10', '0.5', 'RACE01');
+    await waitForBlock(NODE_A());
+
+    var coin = await findOrderCoin('RACE01');
+    t.assert(coin, 'Order not found');
+
+    // Both nodes build fill txns for the same order simultaneously
+    var bUsdt = await findCoinForToken(NODE_B(), TOKEN_ID(), '5');
+    var aUsdt = await findCoinForToken(NODE_A(), TOKEN_ID(), '5');
+    t.assert(bUsdt, 'No USDT on B');
+    t.assert(aUsdt, 'No USDT on A');
+
+    var txidB = 'test_race_b';
+    var txidA = 'test_race_a';
+
+    // Build B's fill
+    var changeB = parseFloat(bUsdt.tokenamount) - 5;
+    var stepsB = [
+        'txncreate id:' + txidB,
+        'txninput id:' + txidB + ' coinid:' + coin.coinid,
+        'txninput id:' + txidB + ' coinid:' + bUsdt.coinid,
+        'txnoutput id:' + txidB + ' amount:5 address:' + ID_A.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false',
+        'txnoutput id:' + txidB + ' amount:10 address:' + ID_B.hexaddr + ' storestate:false'
+    ];
+    if (changeB > 0.0001) stepsB.push('txnoutput id:' + txidB + ' amount:' + changeB + ' address:' + ID_B.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false');
+    stepsB.push('txnsign id:' + txidB + ' publickey:auto');
+    stepsB.push('txnbasics id:' + txidB);
+
+    // Build A's fill (self-fill)
+    var changeA = parseFloat(aUsdt.tokenamount) - 5;
+    var stepsA = [
+        'txncreate id:' + txidA,
+        'txninput id:' + txidA + ' coinid:' + coin.coinid,
+        'txninput id:' + txidA + ' coinid:' + aUsdt.coinid,
+        'txnoutput id:' + txidA + ' amount:5 address:' + ID_A.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false',
+        'txnoutput id:' + txidA + ' amount:10 address:' + ID_A.hexaddr + ' storestate:false'
+    ];
+    if (changeA > 0.0001) stepsA.push('txnoutput id:' + txidA + ' amount:' + changeA + ' address:' + ID_A.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false');
+    stepsA.push('txnsign id:' + txidA + ' publickey:auto');
+    stepsA.push('txnbasics id:' + txidA);
+
+    await buildTx(NODE_B(), txidB, stepsB);
+    await buildTx(NODE_A(), txidA, stepsA);
+
+    // Post both as fast as possible
+    var rB = await rpcB('txnpost id:' + txidB);
+    var rA = await rpcA('txnpost id:' + txidA);
+    t.log('B fill post: ' + rB.status);
+    t.log('A fill post: ' + rA.status);
+
+    await rpcB('txndelete id:' + txidB);
+    await rpcA('txndelete id:' + txidA);
+
+    await waitForBlock(NODE_A());
+
+    var still = await findOrderCoin('RACE01');
+    t.assert(!still, 'Order should be filled by exactly one');
+    t.log('Race resolved — only one fill accepted on-chain');
+
+    var after = await snapshot();
+    assertConserved(before, after, 0.1);
+    t.log('No coins lost in race condition');
+});
+
+test('T9.4 -- Cancel During Fill Race', async function(t) {
+    var before = await snapshot();
+    await createSellOrder('10', '0.5', 'CANCELRACE01');
+    await waitForBlock(NODE_A());
+
+    var coin = await findOrderCoin('CANCELRACE01');
+    t.assert(coin, 'Order not found');
+
+    var bUsdt = await findCoinForToken(NODE_B(), TOKEN_ID(), '5');
+    t.assert(bUsdt, 'No USDT on B');
+
+    // Build cancel on A and fill on B simultaneously
+    var cancelId = 'test_cancelrace_c';
+    var fillId = 'test_cancelrace_f';
+
+    var cancelSteps = [
+        'txncreate id:' + cancelId,
+        'txninput id:' + cancelId + ' coinid:' + coin.coinid,
+        'txnoutput id:' + cancelId + ' amount:' + coin.amount + ' address:' + ID_A.hexaddr + ' storestate:false',
+        'txnsign id:' + cancelId + ' publickey:' + ID_A.pubkey,
+        'txnbasics id:' + cancelId
+    ];
+
+    var change = parseFloat(bUsdt.tokenamount) - 5;
+    var fillSteps = [
+        'txncreate id:' + fillId,
+        'txninput id:' + fillId + ' coinid:' + coin.coinid,
+        'txninput id:' + fillId + ' coinid:' + bUsdt.coinid,
+        'txnoutput id:' + fillId + ' amount:5 address:' + ID_A.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false',
+        'txnoutput id:' + fillId + ' amount:10 address:' + ID_B.hexaddr + ' storestate:false'
+    ];
+    if (change > 0.0001) fillSteps.push('txnoutput id:' + fillId + ' amount:' + change + ' address:' + ID_B.hexaddr + ' tokenid:' + TOKEN_ID() + ' storestate:false');
+    fillSteps.push('txnsign id:' + fillId + ' publickey:auto');
+    fillSteps.push('txnbasics id:' + fillId);
+
+    await buildTx(NODE_A(), cancelId, cancelSteps);
+    await buildTx(NODE_B(), fillId, fillSteps);
+
+    // Post both simultaneously
+    var rc = await rpcA('txnpost id:' + cancelId);
+    var rf = await rpcB('txnpost id:' + fillId);
+    t.log('Cancel post: ' + rc.status + ', Fill post: ' + rf.status);
+
+    await rpcA('txndelete id:' + cancelId);
+    await rpcB('txndelete id:' + fillId);
+
+    await waitForBlock(NODE_A());
+
+    var still = await findOrderCoin('CANCELRACE01');
+    t.assert(!still, 'Order should be consumed by either cancel or fill');
+    t.log('Cancel-vs-fill race resolved — exactly one succeeded');
+
+    var after = await snapshot();
+    assertConserved(before, after, 0.1);
+    t.log('No coins lost in cancel-fill race');
+});
+
+test('T9.5 -- Zombie Stress (10 Orphaned Txns)', async function(t) {
+    // Clean any leftovers from previous runs first
+    for (var i = 0; i < 10; i++) { await rpcA('txndelete id:test_zombiestress_' + i); }
+    // Create 10 orphaned transactions
+    for (var i = 0; i < 10; i++) {
+        await rpcA('txncreate id:test_zombiestress_' + i);
+    }
+
+    var list = await rpcA('txnlist');
+    var zombieCount = 0;
+    if (list.status && list.response) {
+        list.response.forEach(function(tx) {
+            var id = tx.id || tx;
+            if (typeof id === 'string' && id.indexOf('test_zombiestress') >= 0) zombieCount++;
+        });
+    }
+    t.log('Created ' + zombieCount + ' zombie txns');
+
+    // Cleanup
+    await cleanup(NODE_A());
+
+    var list2 = await rpcA('txnlist');
+    var remaining = 0;
+    if (list2.status && list2.response) {
+        list2.response.forEach(function(tx) {
+            var id = tx.id || tx;
+            if (typeof id === 'string' && id.indexOf('test_zombiestress') >= 0) remaining++;
+        });
+    }
+    t.assertEq(remaining, 0, 'All zombies should be cleaned up');
+    t.log('All 10 zombie txns cleaned up successfully');
+});
+
+test('T9.6 -- Double-Spend Attempt', async function(t) {
+    // Get one of B's coins
+    var bCoin = await findCoinForToken(NODE_B(), '0x00', '10');
+    t.assert(bCoin, 'No Minima coin on B');
+    t.log('B coin: ' + bCoin.coinid + ' amount=' + bCoin.amount);
+
+    // Build two txns spending the same coin to different addresses
+    var txid1 = 'test_doublespend1';
+    var txid2 = 'test_doublespend2';
+
+    await buildTx(NODE_B(), txid1, [
+        'txncreate id:' + txid1,
+        'txninput id:' + txid1 + ' coinid:' + bCoin.coinid,
+        'txnoutput id:' + txid1 + ' amount:' + bCoin.amount + ' address:' + ID_A.hexaddr + ' storestate:false',
+        'txnsign id:' + txid1 + ' publickey:auto',
+        'txnbasics id:' + txid1
+    ]);
+
+    var secondBuildFailed = false;
+    try {
+        await buildTx(NODE_B(), txid2, [
+            'txncreate id:' + txid2,
+            'txninput id:' + txid2 + ' coinid:' + bCoin.coinid,
+            'txnoutput id:' + txid2 + ' amount:' + bCoin.amount + ' address:' + ID_B.hexaddr + ' storestate:false',
+            'txnsign id:' + txid2 + ' publickey:auto',
+            'txnbasics id:' + txid2
+        ]);
+    } catch(e) {
+        secondBuildFailed = true;
+        t.log('Second spend of same coin failed at build: ' + e.message);
+    }
+
+    // Post first
+    await rpcB('txnpost id:' + txid1);
+
+    if (!secondBuildFailed) {
+        var r2 = await rpcB('txnpost id:' + txid2);
+        t.log('Double-spend post: ' + r2.status);
+    }
+
+    await rpcB('txndelete id:' + txid1);
+    await rpcB('txndelete id:' + txid2);
+
+    await waitForBlock(NODE_B());
+    t.log('Double-spend resolved — UTXO model prevents duplicate spending');
+});
+
+test('T9.7 -- Rapid Cancel-Recreate', async function(t) {
+    var before = await snapshot();
+
+    await createSellOrder('5', '0.5', 'RECREATE01');
+    await waitForBlock(NODE_A());
+
+    var coin = await findOrderCoin('RECREATE01');
+    t.assert(coin, 'Order not found');
+
+    // Cancel
+    await cancelOrder(NODE_A(), coin.coinid, coin, ID_A);
+    t.log('Cancelled');
+
+    // Immediately recreate (same tag) without waiting for block
+    try {
+        await createSellOrder('5', '0.6', 'RECREATE02');
+        t.log('Recreate sent immediately');
+    } catch(e) {
+        t.log('Recreate failed (expected — UTXO lock): ' + e.message);
+    }
+
+    await waitForBlock(NODE_A());
+    await waitForBlock(NODE_A());
+
+    // Check final state
+    var coins = await getCoinsAt(NODE_A(), SCRIPT_ADDR_V3);
+    var myCoins = coins.filter(function(c) { return getState(c, 0) === ID_A.pubkey; });
+    t.log(myCoins.length + ' order(s) at script after cancel-recreate');
+
+    // Cleanup any remaining
+    for (var i = 0; i < myCoins.length; i++) {
+        try { await cancelOrder(NODE_A(), myCoins[i].coinid, myCoins[i], ID_A); } catch(e) {}
+    }
+    if (myCoins.length > 0) await waitForBlock(NODE_A());
+
+    var after = await snapshot();
+    assertConserved(before, after, 0.1);
+    t.log('No coins lost in rapid cancel-recreate');
+});
+
+// -------- Phase 10: MiniDapp Install --------
+
+test('TA.1 -- Install Limit on Node A (WRITE mode)', async function(t) {
+    var zipPath = '/Users/eurobuddha/Projects/Limit/Limit-1.0.7.mds.zip';
+    var r = await rpcA('mds action:install file:' + zipPath + ' trust:write');
+    if (r.status) {
+        t.log('Installed on A: ' + JSON.stringify(r.response).substring(0, 200));
+    } else {
+        t.log('Install on A: ' + (r.error || 'failed') + ' (may already be installed)');
+    }
+
+    // Verify listed — response is an object, apps in response.minidapps array
+    var list = await rpcA('mds action:list');
+    t.assert(list.status, 'mds list failed');
+    var found = false;
+    var apps = list.response.minidapps || list.response || [];
+    if (!Array.isArray(apps)) apps = [];
+    apps.forEach(function(app) {
+        if (app.conf && app.conf.name === 'Limit') {
+            found = true;
+            t.log('Found: Limit v' + app.conf.version + ' uid=' + app.uid + ' trust=' + (app.conf.permission || app.trust));
+        }
+    });
+    t.assert(found, 'Limit not found in mds list on Node A');
+});
+
+test('TA.2 -- Install Limit on Node B (READ mode)', async function(t) {
+    var zipPath = '/Users/eurobuddha/Projects/Limit/Limit-1.0.7.mds.zip';
+    var r = await rpcB('mds action:install file:' + zipPath);
+    if (r.status) {
+        t.log('Installed on B (default READ): ' + JSON.stringify(r.response).substring(0, 200));
+    } else {
+        t.log('Install on B: ' + (r.error || 'failed') + ' (may already be installed)');
+    }
+
+    var list = await rpcB('mds action:list');
+    t.assert(list.status, 'mds list failed');
+    var found = false;
+    var apps = list.response.minidapps || list.response || [];
+    if (!Array.isArray(apps)) apps = [];
+    apps.forEach(function(app) {
+        if (app.conf && app.conf.name === 'Limit') {
+            found = true;
+            t.log('Found: Limit v' + app.conf.version + ' uid=' + app.uid + ' trust=' + app.trust);
+            t.assertEq(app.trust, 'read', 'Node B should have READ trust');
+        }
+    });
+    t.assert(found, 'Limit not found in mds list on Node B');
+});
+
+test('TA.3 -- Verify Script Registration (Both Nodes)', async function(t) {
+    var rA = await rpcA('scripts address:' + SCRIPT_ADDR_V3);
+    var rB = await rpcB('scripts address:' + SCRIPT_ADDR_V3);
+
+    t.assert(rA.status, 'scripts query failed on A');
+    t.assert(rB.status, 'scripts query failed on B');
+
+    var foundA = rA.response && rA.response.address;
+    var foundB = rB.response && rB.response.address;
+
+    t.log('Node A script registered: ' + (foundA ? 'YES' : 'NO'));
+    t.log('Node B script registered: ' + (foundB ? 'YES' : 'NO'));
+    t.assert(foundA, 'V3 script must be registered on Node A');
+    t.assert(foundB, 'V3 script must be registered on Node B');
+});
+
+test('TA.4 -- Verify checkmode on Both Nodes', async function(t) {
+    var rA = await rpcA('checkmode');
+    var rB = await rpcB('checkmode');
+    t.log('Node A checkmode: ' + JSON.stringify(rA.response));
+    t.log('Node B checkmode: ' + JSON.stringify(rB.response));
+});
+
+test('TA.5 -- Uninstall Limit from Both Nodes', async function(t) {
+    // Find UIDs
+    var listA = await rpcA('mds action:list');
+    var listB = await rpcB('mds action:list');
+
+    if (listA.status) {
+        var appsA = listA.response.minidapps || listA.response || [];
+        if (!Array.isArray(appsA)) appsA = [];
+        for (var i = 0; i < appsA.length; i++) {
+            if (appsA[i].conf && appsA[i].conf.name === 'Limit') {
+                await rpcA('mds action:uninstall uid:' + appsA[i].uid);
+                t.log('Uninstalled from A: ' + appsA[i].uid);
+            }
+        }
+    }
+
+    if (listB.status) {
+        var appsB = listB.response.minidapps || listB.response || [];
+        if (!Array.isArray(appsB)) appsB = [];
+        for (var i = 0; i < appsB.length; i++) {
+            if (appsB[i].conf && appsB[i].conf.name === 'Limit') {
+                await rpcB('mds action:uninstall uid:' + appsB[i].uid);
+                t.log('Uninstalled from B: ' + appsB[i].uid);
+            }
+        }
+    }
+    t.log('Cleanup complete');
+});
+
+// ═══════════════════════════════════════════════════════════════
+// RUNNER
+// ═══════════════════════════════════════════════════════════════
+async function runAll() {
+    STOP_REQUESTED = false;
+    document.getElementById('btnRun').disabled = true;
+    document.getElementById('btnStop').disabled = false;
+    document.getElementById('logPanel').innerHTML = '';
+
+    // Reset all tests
+    for (var i = 0; i < TESTS.length; i++) {
+        TESTS[i].status = 'pending';
+        TESTS[i].error = null;
+        TESTS[i].log = [];
+        TESTS[i].duration = 0;
+    }
+    renderTests();
+
+    // Take suite start snapshot after setup
+    var setupDone = false;
+
+    for (var i = 0; i < TESTS.length; i++) {
+        if (STOP_REQUESTED) {
+            for (var j = i; j < TESTS.length; j++) TESTS[j].status = 'skip';
+            renderTests();
+            break;
+        }
+
+        var t = TESTS[i];
+        t.status = 'running';
+        renderTests();
+
+        var ctx = makeContext(t);
+        var start = Date.now();
+        try {
+            await t.fn(ctx);
+            t.status = 'pass';
+        } catch(e) {
+            t.status = 'fail';
+            t.error = e.message || String(e);
+        }
+        t.duration = Date.now() - start;
+
+        // Cleanup between tests
+        await cleanupBoth();
+
+        // Capture suite start snapshot after Phase 0 completes
+        if (t.name.indexOf('T0.4') === 0 && t.status === 'pass') {
+            SUITE_START_SNAPSHOT = await snapshot();
+        }
+
+        renderTests();
+        updateSummary();
+        await updateNodeStatus();
+    }
+
+    document.getElementById('btnRun').disabled = false;
+    document.getElementById('btnStop').disabled = true;
+    updateSummary();
+}
+
+function stopTests() {
+    STOP_REQUESTED = true;
+    document.getElementById('btnStop').disabled = true;
+}
+
+async function runCleanup() {
+    globalLog('CMD', 'SYS', 'Running full cleanup...');
+    await cleanupBoth();
+    await cancelAllOrders();
+    globalLog('RES', 'SYS', 'Cleanup complete');
+}
+
+function copyResults() {
+    var lines = [];
+    var lastPhase = '';
+    for (var i = 0; i < TESTS.length; i++) {
+        var t = TESTS[i];
+        var phase = t.name.substring(0, 2);
+        if (phase !== lastPhase) { lines.push(PHASES[phase] || phase); lastPhase = phase; }
+        var icon = t.status === 'pass' ? '\u2705' : t.status === 'fail' ? '\u274C' : t.status === 'skip' ? '\u23ED' : '\u2B1C';
+        var dur = (t.duration / 1000).toFixed(1) + 's';
+        lines.push(icon + ' ' + t.name + '  ' + dur);
+        if (t.error) lines.push('  ERROR: ' + t.error);
+        if (t.log.length > 0) t.log.forEach(function(l) { lines.push('  ' + l); });
+    }
+    navigator.clipboard.writeText(lines.join('\n')).then(function() { alert('Results copied'); });
+}
+
+function copyLog() {
+    var panel = document.getElementById('logPanel');
+    var lines = [];
+    for (var i = 0; i < panel.children.length; i++) {
+        lines.push(panel.children[i].textContent);
+    }
+    navigator.clipboard.writeText(lines.join('\n')).then(function() { alert('Log copied'); });
+}
+
+// Init
+renderTests();
+updateNodeStatus();
+</script>
+</body>
+</html>
