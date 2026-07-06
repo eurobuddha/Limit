@@ -534,3 +534,29 @@ body {
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* GTC toggle in the create form */
+.gtc-field { display: flex; align-items: center; gap: 8px; margin: 4px 0 10px; cursor: pointer; }
+.gtc-field input { width: 16px; height: 16px; accent-color: var(--green); }
+.gtc-field__label { font-size: 12px; color: var(--dim); }
+
+/* Edit (✎) button — accent outline, matches the cancel (X) button sizing */
+.btn--edit {
+    background: var(--accent-bg);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    margin-right: 4px;
+}
+
+/* Edit modal (built in JS, appended to body) */
+.modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.45);
+    display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px;
+}
+.modal {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 20px; max-width: 380px; width: 100%; box-shadow: 0 8px 30px rgba(0,0,0,.2);
+}
+.modal__title { font-size: 16px; margin: 0 0 8px; color: var(--text); }
+.modal__desc { font-size: 12px; color: var(--dim); margin: 0 0 14px; line-height: 1.5; }
+.modal__actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }

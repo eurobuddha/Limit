@@ -72,6 +72,8 @@ var CREATE_IN_PROGRESS = false; // guard against rapid double-click on Create
 var MY_TRADES = [];            // personal trading history from SQL
 var PREV_MY_ORDERS = {};       // track mine orders for maker fill detection
 var EXPIRED_ORDERS = [];       // V2 orders past 1500 blocks — pending collection
+var RENEWING_COINIDS = {};     // oldcoinids mid GTC-renewal/edit (from gtc_renewals SQL) — skip in fill detection
+var RENEWING_ORDERIDS = {};    // orderIds mid renewal/edit — drives the "UPDATING…" badge
 
 // -- Init --
 MDS.init(function(msg) {
@@ -215,7 +217,31 @@ function createTables(callback) {
                 "  `gecko_price` varchar(80) NOT NULL," +
                 "  `block` int NOT NULL," +
                 "  `timestamp` bigint NOT NULL" +
-                ")", function() { if (callback) callback(); });
+                ")", function() {
+                // In-flight GTC renewal/edit store — shared with service.js (the renewal engine). Both
+                // sides CREATE IF NOT EXISTS so whichever context runs first wins; schema must match.
+                MDS.sql(
+                    "CREATE TABLE IF NOT EXISTS `gtc_renewals` (" +
+                    "  `orderid` varchar(160) NOT NULL," +
+                    "  `oldcoinid` varchar(160) NOT NULL," +
+                    "  `lockamt` varchar(80) NOT NULL," +
+                    "  `locktok` varchar(80) NOT NULL," +
+                    "  `state` varchar(1024) NOT NULL," +
+                    "  `cancelposted` int NOT NULL," +
+                    "  `cancelblock` int NOT NULL," +
+                    "  `recreatesent` int NOT NULL," +
+                    "  `recreateblock` int NOT NULL," +
+                    "  `fundsmissing` int NOT NULL," +
+                    "  `retries` int NOT NULL," +
+                    "  `snapshot` varchar(512) NOT NULL" +
+                    ")", function() {
+                    MDS.sql(
+                        "CREATE TABLE IF NOT EXISTS `gtc_cancelled` (" +
+                        "  `orderid` varchar(160) NOT NULL," +
+                        "  `block` int NOT NULL" +
+                        ")", function() { if (callback) callback(); });
+                });
+            });
         });
     });
 }
@@ -256,11 +282,13 @@ function autoCollectExpired() {
     if (!EXPIRED_ORDERS || EXPIRED_ORDERS.length === 0) return;
     EXPIRED_ORDERS.forEach(function(c) {
         if (CANCEL_STATUS[c.coinid]) return;
+        if (RENEWING_COINIDS[c.coinid]) return;   // mid renewal/edit — the service owns this coin
         var ownerKey = "";
         var ownerAddr = "";
         var orderId = "";
         var sideNum = "";
         var price = "0";
+        var isGtcCoin = false;
         var amt = c.tokenamount || c.amount;
         for (var i = 0; i < (c.state || []).length; i++) {
             var s = c.state[i];
@@ -269,8 +297,13 @@ function autoCollectExpired() {
             if (s.port === 4) orderId = s.data;
             if (s.port === 5) sideNum = s.data;
             if (s.port === 6) price = s.data;
+            if (s.port === 7 && String(s.data).trim() === "1") isGtcCoin = true;
         }
         if (!ownerAddr) return;
+        // Don't self-collect my own GTC order — leave it to the background service to renew (or to another
+        // party's collector if the service is down). Collecting it here would race the service's cancel and
+        // log a misleading "expired" trade for an order that actually continues.
+        if (isGtcCoin && isMyKey(ownerKey)) return;
         var isMine = isMyKey(ownerKey);
         var side = sideNum === "0" ? "buy" : "sell";
         var verb = isMine ? "Auto-collecting your expired " : "Collecting expired ";
@@ -736,7 +769,6 @@ function refreshOrders() {
                 logActivity("Order book: " + liveCoins.length + " orders (" + (diff > 0 ? "+" : "") + diff + ")", "info");
             }
             PREV_ORDER_COUNT = liveCoins.length;
-            parseOrderCoins(liveCoins);
             // Clear "collecting" locks for coins that have mined (no longer present on-chain).
             // autoCollectExpired sets CANCEL_STATUS["collecting"] and leaves it until the coin disappears
             // from the V4 query — this prevents the mempool-gap double-fire described in code review.
@@ -747,7 +779,12 @@ function refreshOrders() {
                     delete CANCEL_STATUS[cid];
                 }
             }
-            if (INIT_LOAD_DONE) { autoCollectExpired(); }
+            // Load the in-flight GTC renewal/edit set (written by service.js) BEFORE parsing, so the
+            // maker-fill detector doesn't record a false "fill" when the service cancels a coin to renew it.
+            loadRenewing(function() {
+                parseOrderCoins(liveCoins);
+                if (INIT_LOAD_DONE) { autoCollectExpired(); }
+            });
         });
     }
     if (SCRIPT_ADDR_V1) {
@@ -822,15 +859,16 @@ function parseOrderCoins(coins) {
             orderId: oid,
             side: side,
             sideNum: sideNum,
+            gtc: getState(coin, 7).trim() === "1",
             isMine: isMyKey(ownerkey),
             created: parseInt(coin.created) || 0
         });
     });
-    // Detect maker fills: my orders that disappeared (not cancelled, not collected)
+    // Detect maker fills: my orders that disappeared (not cancelled, not collected, not mid-renewal/edit)
     var currentMine = {};
     ORDERS.forEach(function(o) { if (o.isMine) currentMine[o.coinid] = o; });
     for (var cid in PREV_MY_ORDERS) {
-        if (!currentMine[cid] && !CANCEL_STATUS[cid]) {
+        if (!currentMine[cid] && !CANCEL_STATUS[cid] && !RENEWING_COINIDS[cid]) {
             var gone = PREV_MY_ORDERS[cid];
             var makerSide = gone.side;
             var amt = gone.side === "buy"
@@ -868,8 +906,9 @@ function renderOrderBook() {
         var actionLabel = isBuy ? "SELL" : "BUY";
         var actionClass = isBuy ? "btn--sell" : "btn--buy";
         var safeCoinId = o.coinid.replace(/[^a-fA-F0-9x]/g, '');
+        var gtcMark = o.gtc ? ' <span class="side-tag" style="color:var(--green);" title="Good-till-cancelled">∞</span>' : '';
         html += '<div class="book__row book__row--' + o.side + '">' +
-            '<span class="side-tag side-tag--' + o.side + '">' + o.side.toUpperCase() + '</span>' +
+            '<span class="side-tag side-tag--' + o.side + '">' + o.side.toUpperCase() + gtcMark + '</span>' +
             '<span class="price--' + o.side + '">' + fmtPrice(o.price) + '</span>' +
             '<span>' + minimaAmt + '</span><span>' + usdtTotal + '</span>' +
             '<span><button class="btn ' + actionClass + ' btn--sm" onclick="openFill(\'' + safeCoinId + '\')">' + actionLabel + '</button></span></div>';
@@ -891,7 +930,9 @@ function renderMyOrders() {
         // Calculate age for V2 orders
         var age = ((o.address === SCRIPT_ADDR_V2 || o.address === SCRIPT_ADDR_V3 || o.address === SCRIPT_ADDR_V4) && CURRENT_BLOCK > 0 && o.created > 0) ? CURRENT_BLOCK - o.created : -1;
         var ageHtml = "";
-        if (age >= 0) {
+        if (o.gtc) {
+            ageHtml = '<span style="font-size:10px;color:var(--green);" title="Good-till-cancelled — auto-renews">∞ GTC</span>';
+        } else if (age >= 0) {
             var pct = Math.min(100, Math.round(age / 1500 * 100));
             var ageColor = pct > 90 ? "var(--red)" : pct > 70 ? "var(--accent)" : "var(--dim)";
             var remaining = Math.max(0, 1500 - age);
@@ -899,14 +940,17 @@ function renderMyOrders() {
             ageHtml = '<span style="font-size:10px;color:' + ageColor + ';" title="' + age + '/' + '1500 blocks">' + hoursLeft + 'h left</span>';
         }
         var actionHtml;
-        if (cancelState === "pending") {
+        if (RENEWING_ORDERIDS[o.orderId]) {
+            actionHtml = '<span class="cancel-status cancel-status--confirming">UPDATING…</span>';
+        } else if (cancelState === "pending") {
             actionHtml = '<span class="cancel-status cancel-status--pending">PENDING</span>';
         } else if (cancelState === "confirming") {
             actionHtml = '<span class="cancel-status cancel-status--confirming">CANCELLING...</span>';
         } else if (cancelState === "confirmed") {
             actionHtml = '<span class="cancel-status cancel-status--confirmed">CANCELLED</span>';
         } else {
-            actionHtml = '<button class="btn btn--cancel btn--sm" onclick="cancelOrder(\'' + safeCoinId + '\')">X</button>';
+            actionHtml = '<button class="btn btn--edit btn--sm" title="Edit price" onclick="editOrder(\'' + safeCoinId + '\')">✎</button>' +
+                         '<button class="btn btn--cancel btn--sm" onclick="cancelOrder(\'' + safeCoinId + '\')">X</button>';
         }
         html += '<div class="book__row book__row--' + o.side + '">' +
             '<span class="side-tag side-tag--' + o.side + '">' + o.side.toUpperCase() + '</span>' +
@@ -916,6 +960,95 @@ function renderMyOrders() {
             '<span>' + actionHtml + '</span></div>';
     });
     el.innerHTML = html;
+}
+
+// Load the in-flight GTC renewal/edit set from the shared SQL table (written by service.js). Used to
+// (a) suppress false maker-fill records while the service cancels a coin to renew it, and (b) show the
+// "UPDATING…" badge. Table may not exist yet on very first run — that's fine (SELECT errors → empty).
+function loadRenewing(cb) {
+    RENEWING_COINIDS = {}; RENEWING_ORDERIDS = {};
+    MDS.sql("SELECT oldcoinid, orderid FROM gtc_renewals", function(res) {
+        if (res && res.status && res.rows) res.rows.forEach(function(r) {
+            RENEWING_COINIDS[r.OLDCOINID] = true;
+            RENEWING_ORDERIDS[r.ORDERID] = true;
+        });
+        if (cb) cb();
+    });
+}
+
+// -- Edit Order (change price = cancel + re-place, via the service's renewal state machine) --
+function editOrder(coinid) {
+    var order = ORDERS.find(function(o) { return o.coinid === coinid; });
+    if (!order) return;
+    if (RENEWING_ORDERIDS[order.orderId]) { logActivity("Order is already updating — try again shortly", "warn"); return; }
+    var isBuy = order.side === "buy";
+    var lockedLabel = isBuy
+        ? "Your locked " + parseFloat(order.amount).toFixed(4) + " USDT stays; the MINIMA you ask for changes."
+        : "Your locked " + parseFloat(order.amount).toFixed(4) + " MINIMA stays; the USDT you ask for changes.";
+    var wrap = document.createElement("div");
+    wrap.className = "modal-overlay";
+    wrap.innerHTML =
+        '<div class="modal">' +
+        '<h3 class="modal__title">Edit ' + order.side.toUpperCase() + ' — new price (USDT per MINIMA)</h3>' +
+        '<p class="modal__desc">' + lockedLabel + (order.gtc ? ' GTC stays on.' : '') +
+        ' The order is cancelled and re-placed — it leaves the book for a block or two.</p>' +
+        '<input type="number" id="editPrice" class="field__input" step="0.0001" min="0.0001">' +
+        '<div class="modal__actions">' +
+        '<button class="btn btn--sm" id="editBackBtn">Back</button>' +
+        '<button class="btn btn--buy btn--sm" id="editSaveBtn">Re-place</button>' +
+        '</div></div>';
+    document.body.appendChild(wrap);
+    var pi = document.getElementById("editPrice");
+    pi.value = fmtPrice(order.price);
+    document.getElementById("editBackBtn").onclick = function() { document.body.removeChild(wrap); };
+    document.getElementById("editSaveBtn").onclick = function() {
+        var np = pi.value.trim();
+        document.body.removeChild(wrap);
+        doEdit(coinid, np);
+    };
+    pi.focus(); try { pi.select(); } catch(e) {}
+}
+
+function doEdit(coinid, priceStr) {
+    var order = ORDERS.find(function(o) { return o.coinid === coinid; });
+    if (!order) return;
+    var price = parseFloat(priceStr);
+    if (!(price > 0)) { logActivity("Enter a valid price", "err"); return; }
+    var isBuy = order.side === "buy";
+    var lockedAmt = parseFloat(order.amount);   // SELL: locked MINIMA; BUY: locked USDT
+    var newWantAmt, newMinima;
+    if (!isBuy) {                                // SELL: locked MINIMA fixed → wanted USDT = MINIMA × price
+        newWantAmt = (lockedAmt * price).toFixed(8);
+        newMinima = lockedAmt;
+    } else {                                     // BUY: locked USDT fixed → wanted MINIMA = USDT ÷ price
+        newMinima = lockedAmt / price;
+        if (newMinima < 0.01) { logActivity("Result is below the 0.01 MINIMA minimum", "err"); return; }
+        newWantAmt = newMinima.toFixed(8);
+    }
+    // editedState: preserve owner(0)/wantAddr(1)/wantTok(3)/orderId(4)/side(5) + port 7 EXACTLY (edit never
+    // grants/removes GTC); update port 2 (want amount) + port 6 (price).
+    // Port 6 is display-only; store the normalized numeric string (not the raw field text) so a value like
+    // "0.5x" can't corrupt the state JSON. The contract enforces port 2 (want amount) which we computed above.
+    var priceState = String(price);
+    var st = '{"0":"' + order.ownerkey + '","1":"' + order.wantAddr + '","2":"' + newWantAmt +
+             '","3":"' + order.wantTok + '","4":"' + order.orderId + '","5":"' + order.sideNum +
+             '","6":"' + priceState + '"' + (order.gtc ? ',"7":"1"' : '') + '}';
+    var lockAmt = order.amount;                  // locked token amount (tokenamount for buy, amount for sell)
+    var lockTok = order.tokenid;
+    var snap = JSON.stringify({ side: order.side, price: price, minima: newMinima });
+    // Write the intent row; service.js posts the cancel + recreate. Optimistic UI badge now.
+    RENEWING_ORDERIDS[order.orderId] = true; RENEWING_COINIDS[order.coinid] = true; renderMyOrders();
+    MDS.sql("INSERT INTO gtc_renewals (orderid, oldcoinid, lockamt, locktok, state, cancelposted, cancelblock, recreatesent, recreateblock, fundsmissing, retries, snapshot) VALUES ('" +
+        sqlEsc(order.orderId) + "','" + sqlEsc(order.coinid) + "','" + sqlEsc(lockAmt) + "','" + sqlEsc(lockTok) + "','" +
+        sqlEsc(st) + "',0,0,0,0,0,0,'" + sqlEsc(snap) + "')", function(res) {
+        if (res && res.status) {
+            logActivity("Editing " + order.side.toUpperCase() + " → " + fmtPrice(price) + " — cancel + re-place in progress", "info");
+            MDS.notify("Order edit queued — re-placing at " + fmtPrice(price));
+        } else {
+            delete RENEWING_ORDERIDS[order.orderId]; delete RENEWING_COINIDS[order.coinid]; renderMyOrders();
+            logActivity("Edit failed — could not queue (order unchanged)", "err");
+        }
+    });
 }
 
 // -- Create Order --
@@ -971,7 +1104,11 @@ function createOrder() {
             return;
         }
 
-    var stateObj = '{"0":"' + MY_PUBKEY + '","1":"' + MY_HEX_ADDR + '","2":"' + wantAmt + '","3":"' + wantTok + '","4":"' + orderId + '","5":"' + sideNum + '","6":"' + price + '"}';
+    // GTC (good-till-cancelled): mark the order with state port 7 = "1". The V4 script ignores ports >3
+    // so this is invisible/harmless to the contract; service.js auto-renews it before the 1500 expiry.
+    var gtcEl = document.getElementById("gtcToggle");
+    var isGtc = gtcEl ? gtcEl.checked : false;
+    var stateObj = '{"0":"' + MY_PUBKEY + '","1":"' + MY_HEX_ADDR + '","2":"' + wantAmt + '","3":"' + wantTok + '","4":"' + orderId + '","5":"' + sideNum + '","6":"' + price + '"' + (isGtc ? ',"7":"1"' : '') + '}';
 
     var cmd = "send amount:" + lockAmt + " address:" + SCRIPT_ADDR_V4 + " state:" + stateObj;
     if (lockTok) cmd += " tokenid:" + lockTok;
@@ -1013,6 +1150,13 @@ function cancelOrder(coinid) {
     var order = ORDERS.find(function(o) { return o.coinid === coinid; });
     if (!order) return;
     if (CANCEL_STATUS[coinid]) { logActivity("Cancel already in progress for this order", "warn"); return; }
+    // A manual cancel is a WITHDRAW intent — suppress any GTC auto-renewal/edit for this order so the
+    // background service can't re-lock the funds. (Marker pruned by the service after ~2000 blocks.)
+    if (order.gtc || RENEWING_ORDERIDS[order.orderId]) {
+        MDS.sql("INSERT INTO gtc_cancelled (orderid, block) VALUES ('" + sqlEsc(order.orderId) + "'," + (CURRENT_BLOCK || 0) + ")");
+        MDS.sql("DELETE FROM gtc_renewals WHERE orderid='" + sqlEsc(order.orderId) + "'");
+        delete RENEWING_ORDERIDS[order.orderId]; delete RENEWING_COINIDS[order.coinid];
+    }
     CANCEL_STATUS[coinid] = "building";
     MDS.notify("Cancelling order...");
     logActivity("Cancelling " + order.side.toUpperCase() + " order — " + parseFloat(order.amount).toFixed(4) + " @ " + fmtPrice(order.price), "info");
