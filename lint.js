@@ -68,6 +68,7 @@ var PREV_MINIMA_BAL = null;    // track balance changes
 var PREV_USDT_BAL = null;
 var PENDING_FILL_COINID = null; // coinid of order being filled — watch for removal
 var PENDING_CREATE = false;    // true after order send — watch for new mine order to appear
+var PENDING_CREATE_GTC = false; // was the just-placed order GTC (drives the confirmation message)
 var CREATE_IN_PROGRESS = false; // guard against rapid double-click on Create
 var MY_TRADES = [];            // personal trading history from SQL
 var PREV_MY_ORDERS = {};       // track mine orders for maker fill detection
@@ -222,7 +223,7 @@ function createTables(callback) {
                 // sides CREATE IF NOT EXISTS so whichever context runs first wins; schema must match.
                 MDS.sql(
                     "CREATE TABLE IF NOT EXISTS `gtc_renewals` (" +
-                    "  `orderid` varchar(160) NOT NULL," +
+                    "  `orderid` varchar(160) NOT NULL PRIMARY KEY," +
                     "  `oldcoinid` varchar(160) NOT NULL," +
                     "  `lockamt` varchar(80) NOT NULL," +
                     "  `locktok` varchar(80) NOT NULL," +
@@ -237,7 +238,7 @@ function createTables(callback) {
                     ")", function() {
                     MDS.sql(
                         "CREATE TABLE IF NOT EXISTS `gtc_cancelled` (" +
-                        "  `orderid` varchar(160) NOT NULL," +
+                        "  `orderid` varchar(160) NOT NULL PRIMARY KEY," +
                         "  `block` int NOT NULL" +
                         ")", function() { if (callback) callback(); });
                 });
@@ -758,10 +759,11 @@ function refreshOrders() {
             if (PENDING_CREATE && PREV_ORDER_COUNT >= 0 && liveCoins.length > PREV_ORDER_COUNT) {
                 PENDING_CREATE = false;
                 logActivity("Order confirmed on-chain!", "ok");
-                logActivity("Order expires in ~1500 blocks (~23h) — funds auto-return on expiry", "warn");
+                var gtcMsg = PENDING_CREATE_GTC ? "GTC order — auto-renews, never expires" : "Order expires in ~1500 blocks (~23h) — funds auto-return on expiry";
+                logActivity(gtcMsg, PENDING_CREATE_GTC ? "ok" : "warn");
                 logActivity("Waiting for balance update...", "info");
                 var csEl = document.getElementById("createStatus");
-                if (csEl) { csEl.className = "status status--ok"; csEl.innerText = "Order confirmed — expires in ~23h, funds auto-return"; setTimeout(function() { csEl.innerText = ""; csEl.className = "status"; }, 8000); }
+                if (csEl) { csEl.className = "status status--ok"; csEl.innerText = PENDING_CREATE_GTC ? "Order confirmed — GTC, auto-renews" : "Order confirmed — expires in ~23h, funds auto-return"; setTimeout(function() { csEl.innerText = ""; csEl.className = "status"; }, 8000); }
             }
             // Log order book changes
             if (PREV_ORDER_COUNT >= 0 && liveCoins.length !== PREV_ORDER_COUNT) {
@@ -1038,6 +1040,9 @@ function doEdit(coinid, priceStr) {
     var snap = JSON.stringify({ side: order.side, price: price, minima: newMinima });
     // Write the intent row; service.js posts the cancel + recreate. Optimistic UI badge now.
     RENEWING_ORDERIDS[order.orderId] = true; RENEWING_COINIDS[order.coinid] = true; renderMyOrders();
+    // DELETE any pending renewal row FIRST so the edit SUPERSEDES a concurrent auto-renewal (the PRIMARY
+    // KEY on orderid means a stray renewal INSERT can't create a second row that re-places at the old price).
+    MDS.sql("DELETE FROM gtc_renewals WHERE orderid='" + sqlEsc(order.orderId) + "'", function() {
     MDS.sql("INSERT INTO gtc_renewals (orderid, oldcoinid, lockamt, locktok, state, cancelposted, cancelblock, recreatesent, recreateblock, fundsmissing, retries, snapshot) VALUES ('" +
         sqlEsc(order.orderId) + "','" + sqlEsc(order.coinid) + "','" + sqlEsc(lockAmt) + "','" + sqlEsc(lockTok) + "','" +
         sqlEsc(st) + "',0,0,0,0,0,0,'" + sqlEsc(snap) + "')", function(res) {
@@ -1048,6 +1053,7 @@ function doEdit(coinid, priceStr) {
             delete RENEWING_ORDERIDS[order.orderId]; delete RENEWING_COINIDS[order.coinid]; renderMyOrders();
             logActivity("Edit failed — could not queue (order unchanged)", "err");
         }
+    });
     });
 }
 
@@ -1121,9 +1127,10 @@ function createOrder() {
         if (isPending(res)) { showPending(statusEl, "Order queued — approve in Pending Actions"); logActivity("Order pending — approve in Pending Actions", "warn"); return; }
         if (res.status) {
             showOk(statusEl, "Order sent to network...");
-            logActivity(ORDER_SIDE.toUpperCase() + " order placed — " + amt + " MINIMA @ " + price + " USDT", "ok");
+            logActivity(ORDER_SIDE.toUpperCase() + " order placed — " + amt + " MINIMA @ " + price + (isGtc ? " USDT (GTC)" : " USDT"), "ok");
             logActivity("Waiting for on-chain confirmation...", "warn");
             PENDING_CREATE = true;
+            PENDING_CREATE_GTC = isGtc;
             document.getElementById("orderAmount").value = "";
             document.getElementById("orderPrice").value = "";
             document.getElementById("totalSummary").innerText = "0.00";

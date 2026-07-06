@@ -59,9 +59,12 @@ MDS.init(function (msg) {
 });
 
 function ensureTable(cb) {
+    // orderid is the PRIMARY KEY: exactly one in-flight renewal/edit per order. A concurrent auto-renewal
+    // INSERT then fails harmlessly instead of creating a duplicate row that could re-place at the wrong
+    // (old) price and discard a user edit.
     MDS.sql(
         "CREATE TABLE IF NOT EXISTS `gtc_renewals` (" +
-        "  `orderid` varchar(160) NOT NULL," +
+        "  `orderid` varchar(160) NOT NULL PRIMARY KEY," +
         "  `oldcoinid` varchar(160) NOT NULL," +
         "  `lockamt` varchar(80) NOT NULL," +
         "  `locktok` varchar(80) NOT NULL," +
@@ -78,10 +81,16 @@ function ensureTable(cb) {
         // it instead of silently re-locking the funds the user asked to withdraw.
         MDS.sql(
             "CREATE TABLE IF NOT EXISTS `gtc_cancelled` (" +
-            "  `orderid` varchar(160) NOT NULL," +
+            "  `orderid` varchar(160) NOT NULL PRIMARY KEY," +
             "  `block` int NOT NULL" +
             ")", function () { if (cb) cb(); });
     });
+}
+
+// Surface a user-actionable engine problem (e.g. keys LOCKED / no WRITE) into the shared activity log so
+// the page shows it — otherwise a silently-not-renewing "never expires" order looks fine but isn't.
+function svcAlert(msg, type) {
+    MDS.sql("INSERT INTO activitylog (msg, type, timestamp) VALUES ('" + svcEsc(msg) + "','" + (type || "err") + "'," + Date.now() + ")");
 }
 
 function loadMyKeys(cb) {
@@ -160,33 +169,42 @@ function processRenewals() {
             liveCoinids[o.coinid] = true;
             liveOrderIds[o.orderId] = true;
         });
-        // Load the manual-cancel suppression set (and prune stale markers).
-        MDS.sql("DELETE FROM gtc_cancelled WHERE block < " + (CUR_BLOCK - CANCELLED_PRUNE_BLOCKS), function () {
-        MDS.sql("SELECT orderid FROM gtc_cancelled", function (xres) {
-            var cancelledOids = {};
-            if (xres.status && xres.rows) xres.rows.forEach(function (r) { cancelledOids[r.ORDERID] = true; });
-            MDS.sql("SELECT * FROM gtc_renewals", function (rres) {
-                var rows = (rres.status && rres.rows) ? rres.rows : [];
-                var pendingOids = {};
-                rows.forEach(function (row) { pendingOids[row.ORDERID] = true; });
+        pruneCancelled(function () {
+            loadCancelled(function (cancelledOids) {
+                MDS.sql("SELECT * FROM gtc_renewals", function (rres) {
+                    var rows = (rres.status && rres.rows) ? rres.rows : [];
+                    var pendingOids = {};
+                    rows.forEach(function (row) { pendingOids[row.ORDERID] = true; });
 
-                // (1) Advance in-flight renewals/edits (post the cancel, then recreate once it mines).
-                rows.forEach(function (row) { advanceRow(row, liveCoinids, liveOrderIds, cancelledOids); });
+                    // (1) Advance in-flight renewals/edits (post the cancel, then recreate once it mines).
+                    rows.forEach(function (row) { advanceRow(row, liveCoinids, liveOrderIds, cancelledOids); });
 
-                // (2) Enqueue new auto-renewals for my due GTC orders not already in flight / not user-cancelled.
-                var started = 0;
-                for (var i = 0; i < orders.length && started < MAX_RENEW_PER_BLOCK; i++) {
-                    var o = orders[i];
-                    if (o.isMine && o.gtc && (CUR_BLOCK - o.created) >= RENEW_AT &&
-                        !pendingOids[o.orderId] && !cancelledOids[o.orderId]) {
-                        started++;
-                        pendingOids[o.orderId] = true;
-                        enqueueRenewal(o);
+                    // (2) Enqueue new auto-renewals for my due GTC orders not in flight / not user-cancelled.
+                    var started = 0;
+                    for (var i = 0; i < orders.length && started < MAX_RENEW_PER_BLOCK; i++) {
+                        var o = orders[i];
+                        if (o.isMine && o.gtc && (CUR_BLOCK - o.created) >= RENEW_AT &&
+                            !pendingOids[o.orderId] && !cancelledOids[o.orderId]) {
+                            started++;
+                            pendingOids[o.orderId] = true;
+                            enqueueRenewal(o);
+                        }
                     }
-                }
+                });
             });
         });
-        });
+    });
+}
+
+function pruneCancelled(next) {
+    MDS.sql("DELETE FROM gtc_cancelled WHERE block < " + (CUR_BLOCK - CANCELLED_PRUNE_BLOCKS), function () { next(); });
+}
+
+function loadCancelled(next) {
+    MDS.sql("SELECT orderid FROM gtc_cancelled", function (xres) {
+        var set = {};
+        if (xres.status && xres.rows) xres.rows.forEach(function (r) { set[r.ORDERID] = true; });
+        next(set);
     });
 }
 
@@ -303,6 +321,7 @@ function resend(row, oid, lockTok) {
             var rt = parseInt(row.RETRIES) + 1;
             if (rt > MAX_RECREATE_RETRIES) {
                 MDS.log("GTC renewal stranded (funds safe in wallet) — order " + oid);
+                svcAlert("Couldn't re-place a GTC order — its funds are safe in your wallet; re-create the order to put it back on the book.", "warn");
                 MDS.sql("DELETE FROM gtc_renewals WHERE orderid='" + svcEsc(oid) + "'");
             } else {
                 MDS.sql("UPDATE gtc_renewals SET retries=" + rt + ", recreatesent=0, recreateblock=0, fundsmissing=0 WHERE orderid='" + svcEsc(oid) + "'");
@@ -333,7 +352,14 @@ function postCancel(row, done) {
             MDS.cmd(outCmd, function (r2) {
                 if (!r2.status) return finishCancel(txid, false, done);
                 MDS.cmd("txnsign id:" + txid + " publickey:" + ownerkey, function (rs) {
-                    if (!rs || !rs.status) { MDS.log("GTC cancel sign failed: " + (rs ? rs.error : "null")); return finishCancel(txid, false, done); }
+                    if (!rs || !rs.status) {
+                        var serr = rs && rs.error ? String(rs.error) : "unknown";
+                        MDS.log("GTC cancel sign failed: " + serr);
+                        // Vault locked / no WRITE → tell the user; their GTC orders aren't being kept alive.
+                        if (serr.toUpperCase().indexOf("LOCK") >= 0)
+                            svcAlert("GTC auto-renew blocked — node vault is LOCKED. Unlock it to keep your good-till-cancelled orders alive.", "err");
+                        return finishCancel(txid, false, done);
+                    }
                     MDS.cmd("txnbasics id:" + txid, function (rb) {
                         if (!rb || !rb.status) return finishCancel(txid, false, done);
                         MDS.cmd("txnpost id:" + txid, function (rp) {
